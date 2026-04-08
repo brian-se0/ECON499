@@ -8,6 +8,7 @@ import numpy as np
 import polars as pl
 
 from ivsurf.evaluation.metrics import total_variance_to_iv
+from ivsurf.io.parquet import read_parquet_files, scan_parquet_files
 
 
 def _require_files(paths: list[Path], description: str) -> None:
@@ -21,23 +22,18 @@ def load_actual_surface_frame(gold_dir: Path) -> pl.DataFrame:
 
     gold_files = sorted(gold_dir.glob("year=*/*.parquet"))
     _require_files(gold_files, "gold surface")
-    return pl.concat(
-        [
-            pl.read_parquet(path).select(
-                "quote_date",
-                "maturity_index",
-                "maturity_days",
-                "moneyness_index",
-                "moneyness_point",
-                "observed_total_variance",
-                "observed_iv",
-                "completed_total_variance",
-                "completed_iv",
-                "observed_mask",
-                "vega_sum",
-            )
-            for path in gold_files
-        ]
+    return read_parquet_files(gold_files).select(
+        "quote_date",
+        "maturity_index",
+        "maturity_days",
+        "moneyness_index",
+        "moneyness_point",
+        "observed_total_variance",
+        "observed_iv",
+        "completed_total_variance",
+        "completed_iv",
+        "observed_mask",
+        "vega_sum",
     ).sort(["quote_date", "maturity_index", "moneyness_index"])
 
 
@@ -46,7 +42,7 @@ def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
 
     forecast_files = sorted(forecast_dir.glob("*.parquet"))
     _require_files(forecast_files, "forecast")
-    return pl.concat([pl.read_parquet(path) for path in forecast_files]).sort(
+    return read_parquet_files(forecast_files).sort(
         ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
     )
 
@@ -56,7 +52,7 @@ def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
 
     silver_files = sorted(silver_dir.glob("year=*/*.parquet"))
     _require_files(silver_files, "silver")
-    lazy_frame = pl.scan_parquet([str(path) for path in silver_files])
+    lazy_frame = scan_parquet_files(silver_files)
     spot_frame = (
         lazy_frame.select("quote_date", "active_underlying_price_1545")
         .group_by("quote_date")
@@ -169,4 +165,3 @@ def panel_with_completed_iv(
         maturity_years=maturity_years,
     ).reshape(-1)
     return frame.with_columns(pl.Series(output_iv_column, iv))
-

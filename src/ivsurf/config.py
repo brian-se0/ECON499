@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import time
+from datetime import date, time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
@@ -104,6 +104,108 @@ class WalkforwardConfig(BaseModel):
     expanding_train: bool = True
 
 
+class StressWindowConfig(BaseModel):
+    """Named stress subperiod for slice reporting."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    start_date: date
+    end_date: date
+
+    @field_validator("end_date")
+    @classmethod
+    def validate_order(cls, value: date, info: Any) -> date:
+        start_date = info.data.get("start_date")
+        if isinstance(start_date, date) and value < start_date:
+            message = "Stress window end_date must be on or after start_date."
+            raise ValueError(message)
+        return value
+
+
+class ReportArtifactsConfig(BaseModel):
+    """Saved-artifact-only report generation configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    benchmark_model: str = "no_change"
+    primary_loss_metric: str = "observed_wrmse_total_variance"
+    interpolation_comparison_order: tuple[str, ...] = ("moneyness", "maturity")
+    interpolation_cycles: PositiveInt | None = None
+    top_models_per_figure: PositiveInt = 6
+    stress_windows: tuple[StressWindowConfig, ...] = Field(
+        default_factory=lambda: (
+            StressWindowConfig(
+                label="gfc_2008_2009",
+                start_date=date(2008, 9, 1),
+                end_date=date(2009, 6, 30),
+            ),
+            StressWindowConfig(
+                label="volmageddon_2018",
+                start_date=date(2018, 2, 1),
+                end_date=date(2018, 2, 28),
+            ),
+            StressWindowConfig(
+                label="covid_2020",
+                start_date=date(2020, 2, 15),
+                end_date=date(2020, 5, 29),
+            ),
+        )
+    )
+
+    @field_validator("interpolation_comparison_order")
+    @classmethod
+    def validate_interpolation_comparison_order(
+        cls, values: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        allowed = {"maturity", "moneyness"}
+        if set(values) != allowed:
+            message = (
+                "interpolation_comparison_order must contain exactly "
+                "'maturity' and 'moneyness'"
+            )
+            raise ValueError(message)
+        return values
+
+
+class OptunaPrunerConfig(BaseModel):
+    """Optuna pruning configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Literal["median"] = "median"
+    n_startup_trials: int = Field(default=5, ge=0)
+    n_warmup_steps: int = Field(default=1, ge=0)
+    interval_steps: PositiveInt = 1
+
+
+class HpoProfileConfig(BaseModel):
+    """Official Optuna profile used by stage 05."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile_name: str = Field(pattern=r"^[A-Za-z0-9_]+$")
+    n_trials: PositiveInt
+    tuning_splits_count: PositiveInt = 3
+    seed: int = 7
+    sampler: Literal["tpe"] = "tpe"
+    pruner: OptunaPrunerConfig = Field(default_factory=OptunaPrunerConfig)
+
+
+class TrainingProfileConfig(BaseModel):
+    """Official walk-forward training profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile_name: str = Field(pattern=r"^[A-Za-z0-9_]+$")
+    epochs: PositiveInt
+    neural_early_stopping_patience: PositiveInt = 10
+    neural_early_stopping_min_delta: float = Field(default=0.0, ge=0.0)
+    lightgbm_early_stopping_rounds: PositiveInt = 25
+    lightgbm_early_stopping_min_delta: float = Field(default=0.0, ge=0.0)
+    lightgbm_first_metric_only: bool = True
+
+
 class NeuralModelConfig(BaseModel):
     """Torch training parameters."""
 
@@ -143,4 +245,3 @@ def parse_config(model_type: type[BaseModel], path: Path | str) -> BaseModel:
 
     payload = load_yaml_config(path)
     return model_type.model_validate(payload)
-

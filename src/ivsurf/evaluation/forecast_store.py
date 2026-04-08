@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from ivsurf.io.parquet import write_parquet_frame
 from ivsurf.surfaces.grid import SurfaceGrid
 
 
@@ -39,5 +40,4 @@ def write_forecasts(
                     }
                 )
     frame = pl.DataFrame(rows)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.write_parquet(output_path, compression="zstd", statistics=True)
+    write_parquet_frame(frame, output_path)

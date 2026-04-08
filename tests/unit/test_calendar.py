@@ -15,6 +15,11 @@ def test_next_trading_session_skips_holiday() -> None:
     assert calendar.next_trading_session(date(2021, 4, 1)) == date(2021, 4, 5)
 
 
+def test_next_decision_session_skips_early_close() -> None:
+    calendar = MarketCalendar()
+    assert calendar.next_decision_session(date(2019, 11, 27)) == date(2019, 12, 2)
+
+
 def test_am_settled_tau_uses_previous_session_before_settlement() -> None:
     calendar = MarketCalendar(am_settled_roots=("SPX",))
     tau_years = calendar.compute_tau_years(
@@ -23,4 +28,3 @@ def test_am_settled_tau_uses_previous_session_before_settlement() -> None:
         root="SPX",
     )
     assert 0.0 < tau_years < (1.0 / 365.0)
-

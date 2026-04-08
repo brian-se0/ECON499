@@ -12,6 +12,9 @@ import polars as pl
 
 from ivsurf.config import RawDataConfig
 from ivsurf.exceptions import DataValidationError, SchemaDriftError
+from ivsurf.io.parquet import write_parquet_frame
+from ivsurf.qc.raw_checks import assert_single_quote_date, assert_target_symbol_only
+from ivsurf.qc.schema_checks import assert_non_null_columns
 from ivsurf.schemas import RAW_COLUMNS, RAW_POLARS_SCHEMA, validate_raw_columns
 
 
@@ -78,11 +81,20 @@ def ingest_one_zip(zip_path: Path, config: RawDataConfig) -> IngestionResult:
         message = f"No rows for symbol {config.target_symbol} found in {zip_path.name}."
         raise DataValidationError(message)
 
-    if frame.select(pl.col("quote_date").n_unique()).item() != 1:
-        message = f"{zip_path.name} produced multiple quote_date values after ingestion."
-        raise DataValidationError(message)
+    assert_target_symbol_only(
+        frame,
+        symbol_column="underlying_symbol",
+        expected_symbol=config.target_symbol,
+        dataset_name=zip_path.name,
+    )
+    assert_single_quote_date(frame, dataset_name=zip_path.name)
+    assert_non_null_columns(
+        frame,
+        columns=("quote_date", "expiration", "root", "strike", "option_type"),
+        dataset_name=zip_path.name,
+    )
 
-    frame.write_parquet(bronze_path, compression="zstd", statistics=True)
+    write_parquet_frame(frame, bronze_path)
     return IngestionResult(source_zip=zip_path, bronze_path=bronze_path, row_count=frame.height)
 
 

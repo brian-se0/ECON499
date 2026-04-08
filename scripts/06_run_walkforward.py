@@ -1,25 +1,32 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 import typer
 
-from ivsurf.config import NeuralModelConfig, RawDataConfig, SurfaceGridConfig, load_yaml_config
+from ivsurf.config import (
+    HpoProfileConfig,
+    NeuralModelConfig,
+    RawDataConfig,
+    SurfaceGridConfig,
+    TrainingProfileConfig,
+    load_yaml_config,
+)
 from ivsurf.evaluation.forecast_store import write_forecasts
 from ivsurf.models.base import dataset_to_matrices
-from ivsurf.models.elasticnet import ElasticNetSurfaceModel
-from ivsurf.models.har_factor import HarFactorSurfaceModel
-from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
-from ivsurf.models.neural_surface import NeuralSurfaceRegressor
-from ivsurf.models.no_change import NoChangeSurfaceModel
-from ivsurf.models.random_forest import RandomForestSurfaceModel
-from ivsurf.models.ridge import RidgeSurfaceModel
+from ivsurf.progress import create_progress
+from ivsurf.reproducibility import write_run_manifest
 from ivsurf.splits.manifests import load_splits
 from ivsurf.surfaces.grid import SurfaceGrid
+from ivsurf.training.fit_lightgbm import fit_and_predict_lightgbm
 from ivsurf.training.fit_sklearn import fit_and_predict
 from ivsurf.training.fit_torch import fit_and_predict_neural
+from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES, make_model_from_params
+from ivsurf.training.tuning import TuningResult, load_required_tuning_results
+from ivsurf.workflow import resolve_workflow_run_paths, tuning_manifest_path
 
 app = typer.Typer(add_completion=False)
 
@@ -27,6 +34,24 @@ app = typer.Typer(add_completion=False)
 def _indices_for_dates(all_dates: np.ndarray, subset: tuple[str, ...]) -> np.ndarray:
     lookup = {str(value): index for index, value in enumerate(all_dates)}
     return np.asarray([lookup[item] for item in subset], dtype=np.int64)
+
+
+def _merged_params(
+    base_params: dict[str, object],
+    tuning_result: TuningResult,
+    *,
+    expected_training_profile_name: str,
+) -> dict[str, object]:
+    if tuning_result.training_profile_name != expected_training_profile_name:
+        message = (
+            "Selected training profile does not match the training profile recorded in the "
+            f"tuning manifest for {tuning_result.model_name}: "
+            f"{expected_training_profile_name!r} != {tuning_result.training_profile_name!r}"
+        )
+        raise ValueError(message)
+    merged = dict(base_params)
+    merged.update(tuning_result.best_params)
+    return merged
 
 
 @app.command()
@@ -39,10 +64,24 @@ def main(
     lightgbm_config_path: Path = Path("configs/models/lightgbm.yaml"),
     random_forest_config_path: Path = Path("configs/models/random_forest.yaml"),
     neural_config_path: Path = Path("configs/models/neural_surface.yaml"),
+    hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
+    training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    mlflow_tracking_uri: str | None = None,
+    mlflow_experiment_name: str = "ivsurf",
 ) -> None:
+    started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
+    hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
+    training_profile = TrainingProfileConfig.model_validate(
+        load_yaml_config(training_profile_config_path)
+    )
     grid = SurfaceGrid.from_config(surface_config)
+    workflow_paths = resolve_workflow_run_paths(
+        raw_config,
+        hpo_profile_name=hpo_profile.profile_name,
+        training_profile_name=training_profile.profile_name,
+    )
 
     feature_frame = pl.read_parquet(
         raw_config.gold_dir / "daily_features.parquet"
@@ -56,57 +95,152 @@ def main(
     lightgbm_params = load_yaml_config(lightgbm_config_path)
     random_forest_params = load_yaml_config(random_forest_config_path)
     neural_config = NeuralModelConfig.model_validate(load_yaml_config(neural_config_path))
+    neural_config = neural_config.model_copy(update={"epochs": training_profile.epochs})
+    tuning_results = load_required_tuning_results(
+        raw_config.manifests_dir,
+        hpo_profile_name=hpo_profile.profile_name,
+        model_names=TUNABLE_MODEL_NAMES,
+    )
 
-    model_factories = {
-        "no_change": lambda: NoChangeSurfaceModel(),
-        "ridge": lambda: RidgeSurfaceModel(alpha=float(ridge_params["alpha"])),
-        "elasticnet": lambda: ElasticNetSurfaceModel(
-            alpha=float(elasticnet_params["alpha"]),
-            l1_ratio=float(elasticnet_params["l1_ratio"]),
-            max_iter=int(elasticnet_params["max_iter"]),
-        ),
-        "har_factor": lambda: HarFactorSurfaceModel(
-            n_factors=int(har_params["n_factors"]),
-            alpha=float(har_params["alpha"]),
-            target_dim=matrices.targets.shape[1],
-        ),
-        "lightgbm": lambda: LightGBMSurfaceModel(
-            **{key: value for key, value in lightgbm_params.items() if key != "model_name"}
-        ),
-        "random_forest": lambda: RandomForestSurfaceModel(
-            **{key: value for key, value in random_forest_params.items() if key != "model_name"}
-        ),
-        "neural_surface": lambda: NeuralSurfaceRegressor(
-            config=neural_config,
-            grid_shape=grid.shape,
-        ),
+    base_param_map = {
+        "ridge": {key: value for key, value in ridge_params.items() if key != "model_name"},
+        "elasticnet": {
+            key: value for key, value in elasticnet_params.items() if key != "model_name"
+        },
+        "har_factor": {key: value for key, value in har_params.items() if key != "model_name"},
+        "lightgbm": {
+            key: value for key, value in lightgbm_params.items() if key != "model_name"
+        },
+        "random_forest": {
+            key: value for key, value in random_forest_params.items() if key != "model_name"
+        },
+        "neural_surface": neural_config.model_dump(mode="python", exclude={"model_name"}),
     }
 
-    for model_name, factory in model_factories.items():
-        prediction_blocks: list[np.ndarray] = []
-        quote_date_blocks: list[np.ndarray] = []
-        target_date_blocks: list[np.ndarray] = []
-        for split in splits:
-            train_dates = split.train_dates + split.validation_dates
-            train_index = _indices_for_dates(matrices.quote_dates, train_dates)
-            test_index = _indices_for_dates(matrices.quote_dates, split.test_dates)
-            model = factory()
-            if model_name == "neural_surface":
-                predictions = fit_and_predict_neural(model, train_index, test_index, matrices)  # type: ignore[arg-type]
-            else:
-                predictions = fit_and_predict(model, train_index, test_index, matrices)  # type: ignore[arg-type]
-            prediction_blocks.append(predictions)
-            quote_date_blocks.append(matrices.quote_dates[test_index])
-            target_date_blocks.append(matrices.target_dates[test_index])
-
-        write_forecasts(
-            output_path=raw_config.gold_dir / "forecasts" / f"{model_name}.parquet",
-            model_name=model_name,
-            quote_dates=np.concatenate(quote_date_blocks),
-            target_dates=np.concatenate(target_date_blocks),
-            predictions=np.vstack(prediction_blocks),
-            grid=grid,
+    tuned_param_map = {
+        model_name: _merged_params(
+            base_param_map[model_name],
+            tuning_result,
+            expected_training_profile_name=training_profile.profile_name,
         )
+        for model_name, tuning_result in tuning_results.items()
+    }
+
+    model_names = ("no_change", *TUNABLE_MODEL_NAMES)
+    total_steps = len(model_names) * len(splits)
+    with create_progress() as progress:
+        task_id = progress.add_task("Stage 06 walk-forward forecasting", total=total_steps)
+        for model_name in model_names:
+            prediction_blocks: list[np.ndarray] = []
+            quote_date_blocks: list[np.ndarray] = []
+            target_date_blocks: list[np.ndarray] = []
+            for split in splits:
+                progress.update(
+                    task_id,
+                    description=f"Stage 06 walk-forward {model_name}: {split.split_id}",
+                )
+                train_index = _indices_for_dates(matrices.quote_dates, split.train_dates)
+                validation_index = _indices_for_dates(matrices.quote_dates, split.validation_dates)
+                test_index = _indices_for_dates(matrices.quote_dates, split.test_dates)
+                if model_name == "no_change":
+                    fit_index = np.concatenate([train_index, validation_index])
+                    model = make_model_from_params(
+                        model_name=model_name,
+                        params={},
+                        target_dim=matrices.targets.shape[1],
+                        grid_shape=grid.shape,
+                        base_neural_config=neural_config,
+                    )
+                    predictions = fit_and_predict(model, fit_index, test_index, matrices)
+                else:
+                    model = make_model_from_params(
+                        model_name=model_name,
+                        params=tuned_param_map[model_name],
+                        target_dim=matrices.targets.shape[1],
+                        grid_shape=grid.shape,
+                        base_neural_config=neural_config,
+                    )
+                    if model_name == "lightgbm":
+                        predictions = fit_and_predict_lightgbm(
+                            model,
+                            train_index,
+                            validation_index,
+                            test_index,
+                            matrices,
+                            training_profile,
+                        )
+                    elif model_name == "neural_surface":
+                        predictions = fit_and_predict_neural(
+                            model,
+                            train_index,
+                            validation_index,
+                            test_index,
+                            matrices,
+                            training_profile,
+                        )
+                    else:
+                        fit_index = np.concatenate([train_index, validation_index])
+                        predictions = fit_and_predict(model, fit_index, test_index, matrices)
+                prediction_blocks.append(predictions)
+                quote_date_blocks.append(matrices.quote_dates[test_index])
+                target_date_blocks.append(matrices.target_dates[test_index])
+                progress.advance(task_id)
+
+            write_forecasts(
+                output_path=workflow_paths.forecast_dir / f"{model_name}.parquet",
+                model_name=model_name,
+                quote_dates=np.concatenate(quote_date_blocks),
+                target_dates=np.concatenate(target_date_blocks),
+                predictions=np.vstack(prediction_blocks),
+                grid=grid,
+            )
+    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
+    tuning_manifest_paths = [
+        tuning_manifest_path(raw_config.manifests_dir, hpo_profile.profile_name, model_name)
+        for model_name in TUNABLE_MODEL_NAMES
+    ]
+    run_manifest_path = write_run_manifest(
+        manifests_dir=raw_config.manifests_dir,
+        repo_root=Path.cwd(),
+        script_name="06_run_walkforward",
+        started_at=started_at,
+        config_paths=[
+            raw_config_path,
+            surface_config_path,
+            ridge_config_path,
+            elasticnet_config_path,
+            har_config_path,
+            lightgbm_config_path,
+            random_forest_config_path,
+            neural_config_path,
+            hpo_profile_config_path,
+            training_profile_config_path,
+        ],
+        input_artifact_paths=[
+            raw_config.gold_dir / "daily_features.parquet",
+            split_manifest_path,
+            *tuning_manifest_paths,
+        ],
+        output_artifact_paths=forecast_paths,
+        data_manifest_paths=[
+            raw_config.gold_dir / "daily_features.parquet",
+            *tuning_manifest_paths,
+        ],
+        split_manifest_path=split_manifest_path,
+        random_seed=neural_config.seed,
+        extra_metadata={
+            "model_names": list(model_names),
+            "n_splits": len(splits),
+            "hpo_profile_name": hpo_profile.profile_name,
+            "training_profile_name": training_profile.profile_name,
+            "workflow_run_label": workflow_paths.run_label,
+        },
+        mlflow_tracking_uri=mlflow_tracking_uri,
+        mlflow_experiment_name=mlflow_experiment_name,
+    )
+    typer.echo(f"Saved forecast artifacts to {workflow_paths.forecast_dir}")
+    typer.echo(f"Saved run manifest to {run_manifest_path}")
 
 
 if __name__ == "__main__":

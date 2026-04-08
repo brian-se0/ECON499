@@ -1,0 +1,16 @@
+benchmark_model: "no_change"
+primary_loss_metric: "observed_wrmse_total_variance"
+interpolation_comparison_order:
+  - "moneyness"
+  - "maturity"
+top_models_per_figure: 6
+stress_windows:
+  - label: "gfc_2008_2009"
+    start_date: "2008-09-01"
+    end_date: "2009-06-30"
+  - label: "volmageddon_2018"
+    start_date: "2018-02-01"
+    end_date: "2018-02-28"
+  - label: "covid_2020"
+    start_date: "2020-02-15"
+    end_date: "2020-05-29"

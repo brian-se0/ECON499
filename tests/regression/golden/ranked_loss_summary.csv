@@ -1,0 +1,4 @@
+rank,model_name,mean_observed_wrmse_total_variance,std_observed_wrmse_total_variance,n_target_dates,improvement_vs_benchmark_pct
+1,no_change,0.004209,0.000370,3,0.000000
+2,ridge,0.004213,0.000370,3,-0.092530
+3,neural_surface,0.004215,0.000371,3,-0.146972

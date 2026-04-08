@@ -12,6 +12,7 @@ from ivsurf.calendar import MarketCalendar
 from ivsurf.config import FeatureConfig, MarketCalendarConfig
 from ivsurf.features.lagged_surface import pivot_surface_arrays, summarize_lag_window
 from ivsurf.features.liquidity import build_daily_liquidity_features
+from ivsurf.qc.timing_checks import assert_next_decision_session_alignment
 from ivsurf.surfaces.grid import SurfaceGrid
 
 
@@ -52,8 +53,7 @@ def build_daily_feature_dataset(
         if not isinstance(quote_date, date) or not isinstance(target_date, date):
             message = "Feature dataset expects Polars Date values for quote_date/target_date."
             raise TypeError(message)
-        if calendar.next_trading_session(quote_date) != target_date:
-            continue
+        assert_next_decision_session_alignment(calendar, quote_date, target_date)
 
         row: dict[str, object] = {"quote_date": quote_date, "target_date": target_date}
         for window in feature_config.lag_windows:
@@ -71,6 +71,9 @@ def build_daily_feature_dataset(
             row.update(_vector_columns("feature_surface_change_01", change_vector))
 
         if feature_config.include_liquidity:
+            if quote_date not in liquidity_by_date:
+                message = f"Missing liquidity features for quote_date={quote_date.isoformat()}."
+                raise KeyError(message)
             daily_liquidity = liquidity_by_date[quote_date]
             row["feature_coverage_ratio"] = float(daily_liquidity["coverage_ratio"])
             row["feature_daily_vega_sum"] = float(daily_liquidity["daily_vega_sum"])

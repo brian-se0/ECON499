@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 
@@ -11,7 +13,7 @@ from ivsurf.models.base import SurfaceForecastModel
 class RandomForestSurfaceModel(SurfaceForecastModel):
     """Multi-output random forest on compact daily features."""
 
-    def __init__(self, **params: int) -> None:
+    def __init__(self, **params: Any) -> None:
         self.model = RandomForestRegressor(**params)
 
     def fit(
@@ -26,4 +28,3 @@ class RandomForestSurfaceModel(SurfaceForecastModel):
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         return np.asarray(self.model.predict(features), dtype=np.float64)
-

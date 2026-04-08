@@ -45,6 +45,14 @@ class MarketCalendar:
         next_value = self._calendar.next_session(label)
         return cast(date, next_value.date())
 
+    def next_decision_session(self, session_date: date) -> date:
+        """Return the next session that still contains the configured decision timestamp."""
+
+        next_session = self.next_session(session_date)
+        while not self.session_has_decision_time(next_session):
+            next_session = self.next_session(next_session)
+        return next_session
+
     def session_has_decision_time(self, session_date: date) -> bool:
         if not self.is_session(session_date):
             return False

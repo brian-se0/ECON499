@@ -1,27 +1,34 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import optuna
-import orjson
 import polars as pl
 import typer
 
-from ivsurf.config import NeuralModelConfig, RawDataConfig, SurfaceGridConfig, load_yaml_config
+from ivsurf.config import (
+    HpoProfileConfig,
+    NeuralModelConfig,
+    RawDataConfig,
+    SurfaceGridConfig,
+    TrainingProfileConfig,
+    load_yaml_config,
+)
 from ivsurf.evaluation.metrics import weighted_rmse
 from ivsurf.models.base import DatasetMatrices, dataset_to_matrices
-from ivsurf.models.elasticnet import ElasticNetSurfaceModel
-from ivsurf.models.har_factor import HarFactorSurfaceModel
-from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
-from ivsurf.models.neural_surface import NeuralSurfaceRegressor
-from ivsurf.models.random_forest import RandomForestSurfaceModel
-from ivsurf.models.ridge import RidgeSurfaceModel
+from ivsurf.progress import create_progress
+from ivsurf.reproducibility import write_run_manifest
 from ivsurf.splits.manifests import WalkforwardSplit, load_splits
 from ivsurf.surfaces.grid import SurfaceGrid
+from ivsurf.training.fit_lightgbm import fit_and_predict_lightgbm
 from ivsurf.training.fit_sklearn import fit_and_predict
 from ivsurf.training.fit_torch import fit_and_predict_neural
+from ivsurf.training.model_factory import suggest_model_from_trial
+from ivsurf.training.tuning import TuningResult, write_tuning_result
+from ivsurf.workflow import tuning_manifest_path
 
 app = typer.Typer(add_completion=False)
 
@@ -45,68 +52,14 @@ def _validation_score(
     )
 
 
-def _make_model(
-    model_name: str,
-    trial: optuna.Trial,
-    target_dim: int,
-    grid_shape: tuple[int, int],
-    base_neural_config: NeuralModelConfig,
-) -> Any:
-    if model_name == "ridge":
-        return RidgeSurfaceModel(alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True))
-    if model_name == "elasticnet":
-        return ElasticNetSurfaceModel(
-            alpha=trial.suggest_float("alpha", 1.0e-4, 10.0, log=True),
-            l1_ratio=trial.suggest_float("l1_ratio", 0.01, 0.95),
-            max_iter=10_000,
+def _make_pruner(hpo_profile: HpoProfileConfig) -> optuna.pruners.BasePruner:
+    if hpo_profile.pruner.name == "median":
+        return optuna.pruners.MedianPruner(
+            n_startup_trials=hpo_profile.pruner.n_startup_trials,
+            n_warmup_steps=hpo_profile.pruner.n_warmup_steps,
+            interval_steps=hpo_profile.pruner.interval_steps,
         )
-    if model_name == "har_factor":
-        return HarFactorSurfaceModel(
-            n_factors=trial.suggest_int("n_factors", 2, min(12, target_dim)),
-            alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True),
-            target_dim=target_dim,
-        )
-    if model_name == "lightgbm":
-        return LightGBMSurfaceModel(
-            n_estimators=trial.suggest_int("n_estimators", 100, 500, step=100),
-            learning_rate=trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
-            num_leaves=trial.suggest_int("num_leaves", 15, 63),
-            max_depth=trial.suggest_int("max_depth", 3, 10),
-            min_child_samples=trial.suggest_int("min_child_samples", 10, 60, step=5),
-            feature_fraction=trial.suggest_float("feature_fraction", 0.6, 1.0),
-            lambda_l2=trial.suggest_float("lambda_l2", 1.0e-4, 10.0, log=True),
-            random_state=7,
-        )
-    if model_name == "random_forest":
-        return RandomForestSurfaceModel(
-            n_estimators=trial.suggest_int("n_estimators", 100, 500, step=100),
-            max_depth=trial.suggest_int("max_depth", 4, 16),
-            min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 10),
-            random_state=7,
-            n_jobs=-1,
-        )
-    if model_name == "neural_surface":
-        config = base_neural_config.model_copy(
-            update={
-                "hidden_width": trial.suggest_int("hidden_width", 64, 512, step=64),
-                "depth": trial.suggest_int("depth", 2, 5),
-                "dropout": trial.suggest_float("dropout", 0.0, 0.3),
-                "learning_rate": trial.suggest_float("learning_rate", 1.0e-4, 1.0e-2, log=True),
-                "weight_decay": trial.suggest_float("weight_decay", 1.0e-6, 1.0e-2, log=True),
-                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
-                "calendar_penalty_weight": trial.suggest_float(
-                    "calendar_penalty_weight", 1.0e-4, 0.5, log=True
-                ),
-                "convexity_penalty_weight": trial.suggest_float(
-                    "convexity_penalty_weight", 1.0e-4, 0.5, log=True
-                ),
-                "roughness_penalty_weight": trial.suggest_float(
-                    "roughness_penalty_weight", 1.0e-5, 0.05, log=True
-                ),
-            }
-        )
-        return NeuralSurfaceRegressor(config=config, grid_shape=grid_shape)
-    message = f"Unsupported model_name for tuning: {model_name}"
+    message = f"Unsupported Optuna pruner: {hpo_profile.pruner.name}"
     raise ValueError(message)
 
 
@@ -116,36 +69,61 @@ def _objective_factory(
     tuning_splits: list[WalkforwardSplit],
     grid: SurfaceGrid,
     base_neural_config: NeuralModelConfig,
+    training_profile: TrainingProfileConfig,
+    on_split_complete: Callable[[str], None] | None = None,
 ):
     def objective(trial: optuna.Trial) -> float:
         scores: list[float] = []
-        for split in tuning_splits:
+        for split_index, split in enumerate(tuning_splits):
             train_index = _indices_for_dates(matrices.quote_dates, split.train_dates)
             validation_index = _indices_for_dates(matrices.quote_dates, split.validation_dates)
-            model = _make_model(
+            model = suggest_model_from_trial(
                 model_name=model_name,
                 trial=trial,
                 target_dim=matrices.targets.shape[1],
                 grid_shape=grid.shape,
                 base_neural_config=base_neural_config,
             )
-            if model_name == "neural_surface":
+            if model_name == "lightgbm":
+                predictions = fit_and_predict_lightgbm(
+                    model,
+                    train_index,
+                    validation_index,
+                    validation_index,
+                    matrices,
+                    training_profile,
+                )
+            elif model_name == "neural_surface":
                 predictions = fit_and_predict_neural(
                     model,
                     train_index,
                     validation_index,
+                    validation_index,
                     matrices,
+                    training_profile,
+                    trial=trial,
+                    trial_step_offset=split_index * (training_profile.epochs + 1),
                 )
             else:
                 predictions = fit_and_predict(model, train_index, validation_index, matrices)
-            scores.append(
-                _validation_score(
-                    y_true=matrices.targets[validation_index],
-                    y_pred=predictions,
-                    observed_masks=matrices.observed_masks[validation_index],
-                    vega_weights=matrices.vega_weights[validation_index],
-                )
+            score = _validation_score(
+                y_true=matrices.targets[validation_index],
+                y_pred=predictions,
+                observed_masks=matrices.observed_masks[validation_index],
+                vega_weights=matrices.vega_weights[validation_index],
             )
+            scores.append(score)
+            split_report_step = (
+                split_index * (training_profile.epochs + 1) + training_profile.epochs
+            )
+            trial.report(float(np.mean(scores)), split_report_step)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+            if on_split_complete is not None:
+                on_split_complete(
+                    f"Stage 05 tuning {model_name}: trial {trial.number + 1} "
+                    f"split {split.split_id}"
+                )
         return float(np.mean(scores))
 
     return objective
@@ -157,12 +135,20 @@ def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
     surface_config_path: Path = Path("configs/data/surface.yaml"),
     neural_config_path: Path = Path("configs/models/neural_surface.yaml"),
-    n_trials: int = 20,
-    tuning_splits_count: int = 3,
+    hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
+    training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    mlflow_tracking_uri: str | None = None,
+    mlflow_experiment_name: str = "ivsurf",
 ) -> None:
+    started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
     neural_config = NeuralModelConfig.model_validate(load_yaml_config(neural_config_path))
+    hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
+    training_profile = TrainingProfileConfig.model_validate(
+        load_yaml_config(training_profile_config_path)
+    )
+    neural_config = neural_config.model_copy(update={"epochs": training_profile.epochs})
     grid = SurfaceGrid.from_config(surface_config)
 
     feature_frame = pl.read_parquet(
@@ -170,37 +156,99 @@ def main(
     ).sort("quote_date")
     matrices = dataset_to_matrices(feature_frame)
     splits = load_splits(raw_config.manifests_dir / "walkforward_splits.json")
-    if tuning_splits_count <= 0:
-        message = "tuning_splits_count must be positive."
-        raise ValueError(message)
-    tuning_splits = splits[:tuning_splits_count]
+    tuning_splits = splits[: hpo_profile.tuning_splits_count]
     if not tuning_splits:
         message = "No walk-forward splits available for tuning."
         raise ValueError(message)
 
-    study = optuna.create_study(direction="minimize")
-    study.optimize(
-        _objective_factory(
-            model_name=model_name,
-            matrices=matrices,
-            tuning_splits=tuning_splits,
-            grid=grid,
-            base_neural_config=neural_config,
-        ),
-        n_trials=n_trials,
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.TPESampler(seed=hpo_profile.seed),
+        pruner=_make_pruner(hpo_profile),
     )
+    total_progress_steps = hpo_profile.n_trials * len(tuning_splits)
+    with create_progress() as progress:
+        task_id = progress.add_task(
+            f"Stage 05 tuning {model_name}",
+            total=total_progress_steps,
+        )
 
-    payload = {
-        "model_name": model_name,
-        "best_value": study.best_value,
-        "best_params": study.best_params,
-        "n_trials": n_trials,
-        "tuning_splits_count": tuning_splits_count,
-    }
-    output_path = raw_config.manifests_dir / "tuning" / f"{model_name}.json"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(orjson.dumps(payload, option=orjson.OPT_INDENT_2))
+        def _on_split_complete(description: str) -> None:
+            progress.update(task_id, description=description)
+            progress.advance(task_id)
+
+        study.optimize(
+            _objective_factory(
+                model_name=model_name,
+                matrices=matrices,
+                tuning_splits=tuning_splits,
+                grid=grid,
+                base_neural_config=neural_config,
+                training_profile=training_profile,
+                on_split_complete=_on_split_complete,
+            ),
+            n_trials=hpo_profile.n_trials,
+        )
+
+    completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+    pruned_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.PRUNED,))
+    if not completed_trials:
+        message = (
+            f"Optuna completed no trials for {model_name} under HPO profile "
+            f"{hpo_profile.profile_name!r}."
+        )
+        raise RuntimeError(message)
+    result = TuningResult(
+        model_name=model_name,
+        hpo_profile_name=hpo_profile.profile_name,
+        training_profile_name=training_profile.profile_name,
+        best_value=float(study.best_value),
+        best_params=dict(study.best_params),
+        n_trials_requested=hpo_profile.n_trials,
+        n_trials_completed=len(completed_trials),
+        n_trials_pruned=len(pruned_trials),
+        tuning_splits_count=hpo_profile.tuning_splits_count,
+        seed=hpo_profile.seed,
+        sampler=type(study.sampler).__name__,
+        pruner=type(study.pruner).__name__,
+    )
+    output_path = tuning_manifest_path(
+        raw_config.manifests_dir,
+        hpo_profile.profile_name,
+        model_name,
+    )
+    write_tuning_result(result, output_path)
+    split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
+    run_manifest_path = write_run_manifest(
+        manifests_dir=raw_config.manifests_dir,
+        repo_root=Path.cwd(),
+        script_name="05_tune_models",
+        started_at=started_at,
+        config_paths=[
+            raw_config_path,
+            surface_config_path,
+            neural_config_path,
+            hpo_profile_config_path,
+            training_profile_config_path,
+        ],
+        input_artifact_paths=[raw_config.gold_dir / "daily_features.parquet", split_manifest_path],
+        output_artifact_paths=[output_path],
+        data_manifest_paths=[raw_config.gold_dir / "daily_features.parquet"],
+        split_manifest_path=split_manifest_path,
+        random_seed=hpo_profile.seed,
+        extra_metadata={
+            "model_name": model_name,
+            "hpo_profile_name": hpo_profile.profile_name,
+            "training_profile_name": training_profile.profile_name,
+            "n_trials_requested": hpo_profile.n_trials,
+            "n_trials_completed": len(completed_trials),
+            "n_trials_pruned": len(pruned_trials),
+        },
+        mlflow_tracking_uri=mlflow_tracking_uri,
+        mlflow_experiment_name=mlflow_experiment_name,
+    )
     typer.echo(f"Saved tuning results to {output_path}")
+    typer.echo(f"Saved run manifest to {run_manifest_path}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+profile_name: "train_30_epochs"
+epochs: 30
+neural_early_stopping_patience: 5
+neural_early_stopping_min_delta: 1.0e-6
+lightgbm_early_stopping_rounds: 25
+lightgbm_early_stopping_min_delta: 0.0
+lightgbm_first_metric_only: true

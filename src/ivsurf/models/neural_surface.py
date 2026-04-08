@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
+import optuna
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from ivsurf.config import NeuralModelConfig
+from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
+from ivsurf.evaluation.metrics import weighted_rmse
 from ivsurf.models.base import SurfaceForecastModel
 from ivsurf.models.losses import weighted_surface_mse
 from ivsurf.models.penalties import (
@@ -50,6 +52,41 @@ class NeuralSurfaceMLP(nn.Module):
         return cast(torch.Tensor, self.network(features))
 
 
+def _resolve_device(device_name: str) -> torch.device:
+    device = torch.device(device_name)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        message = "NeuralSurfaceRegressor requested CUDA, but torch.cuda.is_available() is False."
+        raise RuntimeError(message)
+    return device
+
+
+def _clone_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
+    return {
+        name: value.detach().cpu().clone()
+        for name, value in module.state_dict().items()
+    }
+
+
+def _validation_score(
+    model: NeuralSurfaceMLP,
+    *,
+    device: torch.device,
+    features: np.ndarray,
+    targets: np.ndarray,
+    observed_masks: np.ndarray,
+    vega_weights: np.ndarray,
+) -> float:
+    with torch.inference_mode():
+        feature_tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
+        predictions = model(feature_tensor).cpu().numpy().astype(np.float64, copy=False)
+    weights = observed_masks * np.maximum(vega_weights, 0.0)
+    return weighted_rmse(
+        y_true=targets.reshape(-1),
+        y_pred=predictions.reshape(-1),
+        weights=weights.reshape(-1),
+    )
+
+
 @dataclass(slots=True)
 class NeuralSurfaceRegressor(SurfaceForecastModel):
     """Torch regressor wrapper with explicit penalty weights."""
@@ -57,6 +94,9 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
     config: NeuralModelConfig
     grid_shape: tuple[int, int]
     model: NeuralSurfaceMLP | None = None
+    best_epoch: int | None = None
+    epochs_completed: int = 0
+    best_validation_score: float | None = None
 
     def fit(
         self,
@@ -64,13 +104,35 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
         targets: np.ndarray,
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
+        *,
+        validation_features: np.ndarray | None = None,
+        validation_targets: np.ndarray | None = None,
+        validation_observed_masks: np.ndarray | None = None,
+        validation_vega_weights: np.ndarray | None = None,
+        training_profile: TrainingProfileConfig | None = None,
+        trial: optuna.Trial | None = None,
+        trial_step_offset: int = 0,
     ) -> NeuralSurfaceRegressor:
         if observed_masks is None:
             message = "NeuralSurfaceRegressor requires observed_masks."
             raise ValueError(message)
+        if vega_weights is None:
+            message = "NeuralSurfaceRegressor requires vega_weights."
+            raise ValueError(message)
+        if training_profile is not None and (
+            validation_features is None
+            or validation_targets is None
+            or validation_observed_masks is None
+            or validation_vega_weights is None
+        ):
+            message = "Validation arrays are required when a training_profile is provided."
+            raise ValueError(message)
 
         torch.manual_seed(self.config.seed)
-        device = torch.device(self.config.device)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.config.seed)
+
+        device = _resolve_device(self.config.device)
         input_dim = features.shape[1]
         output_dim = targets.shape[1]
         model = NeuralSurfaceMLP(
@@ -85,24 +147,46 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
         )
-        autocast_device = device.type if device.type != "cpu" else "cpu"
-        scaler = torch.amp.GradScaler(enabled=device.type == "cuda")
-
+        use_cuda = device.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=True) if use_cuda else None
         dataset = TensorDataset(
             torch.as_tensor(features, dtype=torch.float32),
             torch.as_tensor(targets, dtype=torch.float32),
             torch.as_tensor(observed_masks, dtype=torch.float32),
         )
-        loader = DataLoader(dataset, batch_size=self.config.batch_size, shuffle=True)
+        generator = torch.Generator().manual_seed(self.config.seed)
+        loader = DataLoader(
+            dataset,
+            batch_size=self.config.batch_size,
+            shuffle=True,
+            generator=generator,
+            pin_memory=use_cuda,
+        )
+
+        best_state_dict: dict[str, torch.Tensor] | None = None
+        best_epoch: int | None = None
+        best_validation_score = float("inf")
+        epochs_without_improvement = 0
+        max_epochs = training_profile.epochs if training_profile is not None else self.config.epochs
+        min_delta = (
+            training_profile.neural_early_stopping_min_delta
+            if training_profile is not None
+            else 0.0
+        )
+        patience = (
+            training_profile.neural_early_stopping_patience
+            if training_profile is not None
+            else max_epochs
+        )
 
         model.train()
-        for _ in range(self.config.epochs):
+        for epoch in range(max_epochs):
             for batch_features, batch_targets, batch_masks in loader:
-                batch_features = batch_features.to(device)
-                batch_targets = batch_targets.to(device)
-                batch_masks = batch_masks.to(device)
+                batch_features = batch_features.to(device, non_blocking=use_cuda)
+                batch_targets = batch_targets.to(device, non_blocking=use_cuda)
+                batch_masks = batch_masks.to(device, non_blocking=use_cuda)
                 optimizer.zero_grad(set_to_none=True)
-                with torch.amp.autocast(device_type=autocast_device, enabled=device.type == "cuda"):
+                with torch.autocast(device_type=device.type, enabled=use_cuda):
                     predictions = model(batch_features)
                     loss = weighted_surface_mse(
                         predictions=predictions,
@@ -124,10 +208,78 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                         * roughness_penalty(predictions, self.grid_shape)
                     )
 
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                if use_cuda:
+                    if scaler is None:
+                        message = "CUDA training requires an initialized GradScaler."
+                        raise RuntimeError(message)
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
 
+            self.epochs_completed = epoch + 1
+            if training_profile is None:
+                continue
+
+            if (
+                validation_features is None
+                or validation_targets is None
+                or validation_observed_masks is None
+                or validation_vega_weights is None
+            ):
+                message = "Validation arrays unexpectedly became unavailable during training."
+                raise RuntimeError(message)
+            validation_score = _validation_score(
+                model,
+                device=device,
+                features=validation_features,
+                targets=validation_targets,
+                observed_masks=validation_observed_masks,
+                vega_weights=validation_vega_weights,
+            )
+            if validation_score < (best_validation_score - min_delta):
+                best_validation_score = validation_score
+                best_epoch = epoch + 1
+                best_state_dict = _clone_state_dict(model)
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+
+            if trial is not None:
+                trial.report(validation_score, trial_step_offset + epoch)
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
+
+            if epochs_without_improvement >= patience:
+                break
+
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict)
+        elif training_profile is not None:
+            if (
+                validation_features is None
+                or validation_targets is None
+                or validation_observed_masks is None
+                or validation_vega_weights is None
+            ):
+                message = "Validation arrays unexpectedly became unavailable after training."
+                raise RuntimeError(message)
+            best_validation_score = _validation_score(
+                model,
+                device=device,
+                features=validation_features,
+                targets=validation_targets,
+                observed_masks=validation_observed_masks,
+                vega_weights=validation_vega_weights,
+            )
+            best_epoch = self.epochs_completed
+
+        self.best_epoch = best_epoch
+        self.best_validation_score = (
+            None if best_validation_score == float("inf") else float(best_validation_score)
+        )
         self.model = model.eval()
         return self
 
@@ -135,7 +287,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
         if self.model is None:
             message = "NeuralSurfaceRegressor must be fit before predict."
             raise ValueError(message)
-        device = torch.device(self.config.device)
+        device = _resolve_device(self.config.device)
         with torch.inference_mode():
             tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
             predictions = np.asarray(self.model(tensor).cpu().numpy(), dtype=np.float64)
