@@ -1,0 +1,16 @@
+target_symbol: "^SPX"
+allowed_option_types:
+  - "C"
+  - "P"
+min_bid: 0.0
+min_ask: 0.0
+require_ask_ge_bid: true
+require_positive_iv: true
+require_positive_vega: true
+require_positive_underlying_price: true
+min_mid_price: 0.0
+max_abs_log_moneyness: 0.5
+min_tau_years: 0.0001
+max_tau_years: 2.5
+drop_early_close_days: true
+

@@ -1,0 +1,16 @@
+model_name: "neural_surface"
+hidden_width: 256
+depth: 3
+dropout: 0.10
+learning_rate: 0.001
+weight_decay: 0.0001
+epochs: 80
+batch_size: 64
+seed: 7
+observed_loss_weight: 1.0
+imputed_loss_weight: 0.25
+calendar_penalty_weight: 0.05
+convexity_penalty_weight: 0.05
+roughness_penalty_weight: 0.005
+device: "cpu"
+

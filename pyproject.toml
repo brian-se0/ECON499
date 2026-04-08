@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ivsurf"
+version = "0.1.0"
+description = "Research-grade SPX implied-volatility-surface forecasting pipeline"
+readme = "README.md"
+requires-python = "==3.14.*"
+license = { text = "Proprietary" }
+authors = [{ name = "Codex" }]
+dependencies = [
+  "arch>=7.2.0",
+  "exchange-calendars>=4.8.3",
+  "greenlet<3.4; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "hypothesis>=6.140.0",
+  "lightgbm>=4.6.0",
+  "numpy>=2.3.0",
+  "optuna>=4.4.0",
+  "orjson>=3.10.18",
+  "polars>=1.31.0",
+  "pyarrow>=20.0.0",
+  "pydantic>=2.11.0",
+  "pydantic-settings>=2.10.0",
+  "pyyaml>=6.0.2",
+  "rich>=14.0.0",
+  "scikit-learn>=1.7.0",
+  "scipy>=1.16.0",
+  "statsmodels>=0.14.4",
+  "torch>=2.8.0",
+  "typer>=0.16.0",
+]
+
+[project.optional-dependencies]
+tracking = [
+  "mlflow>=2.22.0",
+]
+dev = [
+  "mypy>=1.17.0",
+  "pytest>=8.4.0",
+  "pytest-xdist>=3.8.0",
+  "ruff>=0.15.0",
+  "types-PyYAML>=6.0.12",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "N", "Q", "RUF", "UP", "W"]
+ignore = ["E203"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+strict_equality = true
+mypy_path = ["src"]
+ignore_missing_imports = true

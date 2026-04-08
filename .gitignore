@@ -1,0 +1,51 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+
+# Coverage and test outputs
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+
+# ML and experiment outputs
+mlruns/
+mlartifacts/
+*.log
+
+# Research pipeline data artifacts
+data/raw/
+data/bronze/
+data/silver/
+data/gold/
+data/manifests/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+

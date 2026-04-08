@@ -1,0 +1,13 @@
+raw_options_dir: "D:/Options Data"
+bronze_dir: "data/bronze"
+silver_dir: "data/silver"
+gold_dir: "data/gold"
+manifests_dir: "data/manifests"
+raw_file_glob: "UnderlyingOptionsEODCalcs_*.zip"
+target_symbol: "^SPX"
+calendar_name: "XNYS"
+timezone: "America/New_York"
+decision_time: "15:45:00"
+am_settled_roots:
+  - "SPX"
+

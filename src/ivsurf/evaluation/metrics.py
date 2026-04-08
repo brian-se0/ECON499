@@ -1,0 +1,33 @@
+"""Forecast evaluation metrics."""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def _normalize_weights(weights: np.ndarray) -> np.ndarray:
+    total = weights.sum()
+    if total <= 0.0:
+        return np.asarray(np.full_like(weights, 1.0 / weights.size, dtype=np.float64))
+    return np.asarray(weights / total, dtype=np.float64)
+
+
+def weighted_rmse(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray) -> float:
+    normalized = _normalize_weights(weights.astype(np.float64, copy=False))
+    return float(np.sqrt(np.sum(normalized * np.square(y_pred - y_true))))
+
+
+def weighted_mae(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray) -> float:
+    normalized = _normalize_weights(weights.astype(np.float64, copy=False))
+    return float(np.sum(normalized * np.abs(y_pred - y_true)))
+
+
+def qlike(y_true: np.ndarray, y_pred: np.ndarray, positive_floor: float) -> float:
+    true_clipped = np.maximum(y_true, positive_floor)
+    pred_clipped = np.maximum(y_pred, positive_floor)
+    return float(np.mean((true_clipped / pred_clipped) - np.log(true_clipped / pred_clipped) - 1.0))
+
+
+def total_variance_to_iv(total_variance: np.ndarray, maturity_years: np.ndarray) -> np.ndarray:
+    maturity = np.maximum(maturity_years, 1.0e-12)
+    return np.asarray(np.sqrt(np.maximum(total_variance, 0.0) / maturity), dtype=np.float64)

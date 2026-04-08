@@ -1,0 +1,5 @@
+model_name: "elasticnet"
+alpha: 0.01
+l1_ratio: 0.1
+max_iter: 10000
+
