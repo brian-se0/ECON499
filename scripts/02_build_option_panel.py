@@ -10,7 +10,12 @@ import typer
 from ivsurf.calendar import MarketCalendar
 from ivsurf.cleaning.derived_fields import add_derived_fields, build_tau_lookup
 from ivsurf.cleaning.option_filters import apply_option_quality_flags
-from ivsurf.config import CleaningConfig, MarketCalendarConfig, RawDataConfig, load_yaml_config
+from ivsurf.config import (
+    CleaningConfig,
+    RawDataConfig,
+    calendar_config_from_raw,
+    load_yaml_config,
+)
 from ivsurf.io.parquet import write_parquet_frame
 from ivsurf.progress import create_progress, iter_with_progress
 from ivsurf.qc.schema_checks import assert_required_columns
@@ -37,7 +42,7 @@ def main(
     started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     cleaning_config = CleaningConfig.model_validate(load_yaml_config(cleaning_config_path))
-    calendar_config = MarketCalendarConfig.model_validate(load_yaml_config(raw_config_path))
+    calendar_config = calendar_config_from_raw(raw_config)
     market_calendar = MarketCalendar(
         calendar_name=calendar_config.calendar_name,
         timezone=calendar_config.timezone,

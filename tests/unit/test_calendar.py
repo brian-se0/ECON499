@@ -28,3 +28,12 @@ def test_am_settled_tau_uses_previous_session_before_settlement() -> None:
         root="SPX",
     )
     assert 0.0 < tau_years < (1.0 / 365.0)
+
+
+def test_calendar_supports_pre_2006_history() -> None:
+    calendar = MarketCalendar()
+    session_date = date(2004, 1, 2)
+
+    assert calendar.is_session(session_date) is True
+    assert calendar.session_has_decision_time(session_date) is True
+    assert calendar.next_trading_session(session_date) == date(2004, 1, 5)

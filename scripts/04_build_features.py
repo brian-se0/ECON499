@@ -8,10 +8,10 @@ import typer
 
 from ivsurf.config import (
     FeatureConfig,
-    MarketCalendarConfig,
     RawDataConfig,
     SurfaceGridConfig,
     WalkforwardConfig,
+    calendar_config_from_raw,
     load_yaml_config,
 )
 from ivsurf.features.tabular_dataset import build_daily_feature_dataset
@@ -38,7 +38,7 @@ def main(
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
     feature_config = FeatureConfig.model_validate(load_yaml_config(feature_config_path))
-    calendar_config = MarketCalendarConfig.model_validate(load_yaml_config(raw_config_path))
+    calendar_config = calendar_config_from_raw(raw_config)
     walkforward_config = WalkforwardConfig.model_validate(load_yaml_config(walkforward_config_path))
     grid = SurfaceGrid.from_config(surface_config)
 

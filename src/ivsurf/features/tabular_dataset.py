@@ -46,6 +46,14 @@ def build_daily_feature_dataset(
     )
 
     max_window = max(feature_config.lag_windows)
+    if len(surface_arrays.quote_dates) <= max_window:
+        message = (
+            "Not enough daily surfaces to build a supervised feature dataset. "
+            f"Need at least {max_window + 1} decision-time-aligned dates, "
+            f"received {len(surface_arrays.quote_dates)}."
+        )
+        raise ValueError(message)
+
     rows: list[dict[str, object]] = []
     for position in range(max_window - 1, len(surface_arrays.quote_dates) - 1):
         quote_date = surface_arrays.quote_dates[position]

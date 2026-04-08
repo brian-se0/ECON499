@@ -34,6 +34,21 @@ RAW_COLUMNS: tuple[str, ...] = (
     "open_interest",
 )
 
+RAW_ALLOWED_EXTRA_COLUMNS: tuple[str, ...] = (
+    "open",
+    "high",
+    "low",
+    "close",
+    "bid_size_eod",
+    "bid_eod",
+    "ask_size_eod",
+    "ask_eod",
+    "underlying_bid_eod",
+    "underlying_ask_eod",
+    "vwap",
+    "delivery_code",
+)
+
 RAW_POLARS_SCHEMA: dict[str, object] = {
     "underlying_symbol": pl.String,
     "quote_date": pl.String,
@@ -89,11 +104,12 @@ RAW_ARROW_SCHEMA: pa.Schema = pa.schema(
 
 
 def validate_raw_columns(columns: Iterable[str]) -> None:
-    """Fail fast if a raw file drifts from the expected schema."""
+    """Fail fast on missing required columns or unknown raw-schema additions."""
 
     actual = tuple(columns)
     missing = [name for name in RAW_COLUMNS if name not in actual]
-    unexpected = [name for name in actual if name not in RAW_COLUMNS]
+    allowed = set(RAW_COLUMNS) | set(RAW_ALLOWED_EXTRA_COLUMNS)
+    unexpected = [name for name in actual if name not in allowed]
     if missing or unexpected:
         message = (
             "Raw schema drift detected. "

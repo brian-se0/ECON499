@@ -228,6 +228,17 @@ class NeuralModelConfig(BaseModel):
     device: str = "cpu"
 
 
+def calendar_config_from_raw(raw_config: RawDataConfig) -> MarketCalendarConfig:
+    """Project the shared calendar fields from the raw-data config."""
+
+    return MarketCalendarConfig(
+        calendar_name=raw_config.calendar_name,
+        timezone=raw_config.timezone,
+        decision_time=raw_config.decision_time,
+        am_settled_roots=raw_config.am_settled_roots,
+    )
+
+
 def load_yaml_config(path: Path | str) -> dict[str, Any]:
     """Load a YAML config file into a dictionary."""
 

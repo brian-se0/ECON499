@@ -61,10 +61,10 @@ def ingest_one_zip(zip_path: Path, config: RawDataConfig) -> IngestionResult:
 
         lazy_frame = pl.scan_csv(
             extracted_csv,
-            schema=cast(dict[str, Any], RAW_POLARS_SCHEMA),
+            schema_overrides=cast(dict[str, Any], RAW_POLARS_SCHEMA),
             null_values={"open_interest": ""},
             quote_char='"',
-            infer_schema=False,
+            infer_schema=True,
         )
         frame = (
             lazy_frame.select(RAW_COLUMNS)
