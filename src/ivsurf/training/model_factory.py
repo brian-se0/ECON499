@@ -68,6 +68,7 @@ def suggest_model_from_trial(
         )
     if model_name == "lightgbm":
         return LightGBMSurfaceModel(
+            device_type="gpu",
             n_estimators=trial.suggest_int("n_estimators", 100, 500, step=100),
             learning_rate=trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
             num_leaves=trial.suggest_int("num_leaves", 15, 63),

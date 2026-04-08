@@ -32,6 +32,7 @@ Research-grade, leak-free SPX implied-volatility-surface forecasting infrastruct
 Windows note:
 - Install GNU Make through a Windows-friendly package manager such as Scoop, Chocolatey, or Git for Windows.
 - The provided `Makefile` is PowerShell-oriented and is intended for this Windows-first repo.
+- On Windows with a compatible NVIDIA GPU, the default runtime now uses CUDA-enabled PyTorch for the neural model and LightGBM `device_type="gpu"` for the LightGBM baseline.
 
 ## Setup
 
