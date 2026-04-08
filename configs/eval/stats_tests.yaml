@@ -1,0 +1,13 @@
+loss_metric: "observed_wrmse_total_variance"
+benchmark_model: "no_change"
+dm_alternative: "greater"
+dm_max_lag: 0
+spa_block_size: 5
+spa_bootstrap_reps: 500
+spa_alpha: 0.10
+mcs_block_size: 5
+mcs_bootstrap_reps: 500
+mcs_alpha: 0.10
+bootstrap_seed: 7
+full_grid_weighting: "uniform"
+

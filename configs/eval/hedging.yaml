@@ -1,0 +1,11 @@
+risk_free_rate: 0.0
+level_notional: 1.0
+skew_notional: 1.0
+calendar_notional: 0.5
+skew_moneyness_abs: 0.10
+short_maturity_days: 30
+long_maturity_days: 90
+hedge_maturity_days: 30
+hedge_straddle_moneyness: 0.0
+hedge_spot_assumption: "no_change"
+
