@@ -83,6 +83,7 @@ This project is not a demo. It is research infrastructure.
 
 - Use explicit schemas at ingestion.
 - Process raw files incrementally by day or partition.
+- Enforce the official thesis sample window `2004-01-02` through `2021-04-09` in executable config and code, not by manual folder curation.
 - Project only needed columns as early as possible.
 - Filter to `^SPX` as early as possible.
 - Keep float64 for cleaning, interpolation, and statistical evaluation.

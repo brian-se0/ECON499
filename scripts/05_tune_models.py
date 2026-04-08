@@ -21,6 +21,7 @@ from ivsurf.evaluation.metrics import weighted_rmse
 from ivsurf.models.base import DatasetMatrices, dataset_to_matrices
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
+from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.splits.manifests import WalkforwardSplit, load_splits
 from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.training.fit_lightgbm import fit_and_predict_lightgbm
@@ -150,12 +151,44 @@ def main(
     )
     neural_config = neural_config.model_copy(update={"epochs": training_profile.epochs})
     grid = SurfaceGrid.from_config(surface_config)
+    split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
+    output_path = tuning_manifest_path(
+        raw_config.manifests_dir,
+        hpo_profile.profile_name,
+        model_name,
+    )
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "05_tune_models"),
+        stage_name="05_tune_models",
+        context_hash=build_resume_context_hash(
+            config_paths=[
+                raw_config_path,
+                surface_config_path,
+                neural_config_path,
+                hpo_profile_config_path,
+                training_profile_config_path,
+            ],
+            input_artifact_paths=[
+                raw_config.gold_dir / "daily_features.parquet",
+                split_manifest_path,
+            ],
+            extra_tokens={"model_name": model_name},
+        ),
+    )
+    resume_item_id = model_name
+    if resumer.item_complete(resume_item_id, required_output_paths=[output_path]):
+        typer.echo(
+            f"Stage 05 resume: tuning manifest already complete for {model_name} "
+            "under the current context; skipping."
+        )
+        return
+    resumer.clear_item(resume_item_id, output_paths=[output_path])
 
     feature_frame = pl.read_parquet(
         raw_config.gold_dir / "daily_features.parquet"
     ).sort("quote_date")
     matrices = dataset_to_matrices(feature_frame)
-    splits = load_splits(raw_config.manifests_dir / "walkforward_splits.json")
+    splits = load_splits(split_manifest_path)
     tuning_splits = splits[: hpo_profile.tuning_splits_count]
     if not tuning_splits:
         message = "No walk-forward splits available for tuning."
@@ -212,13 +245,19 @@ def main(
         sampler=type(study.sampler).__name__,
         pruner=type(study.pruner).__name__,
     )
-    output_path = tuning_manifest_path(
-        raw_config.manifests_dir,
-        hpo_profile.profile_name,
-        model_name,
-    )
     write_tuning_result(result, output_path)
-    split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
+    resumer.mark_complete(
+        resume_item_id,
+        output_paths=[output_path],
+        metadata={
+            "model_name": model_name,
+            "hpo_profile_name": hpo_profile.profile_name,
+            "training_profile_name": training_profile.profile_name,
+            "n_trials_requested": hpo_profile.n_trials,
+            "n_trials_completed": len(completed_trials),
+            "n_trials_pruned": len(pruned_trials),
+        },
+    )
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
         repo_root=Path.cwd(),
@@ -243,6 +282,7 @@ def main(
             "n_trials_requested": hpo_profile.n_trials,
             "n_trials_completed": len(completed_trials),
             "n_trials_pruned": len(pruned_trials),
+            "resume_context_hash": resumer.context_hash,
         },
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_experiment_name=mlflow_experiment_name,

@@ -8,6 +8,7 @@ from pathlib import Path
 import orjson
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
+from ivsurf.io.atomic import write_bytes_atomic
 from ivsurf.workflow import tuning_manifest_path
 
 type HyperparameterValue = bool | float | int | str
@@ -36,7 +37,8 @@ def write_tuning_result(result: TuningResult, output_path: Path) -> None:
     """Persist a tuning manifest with explicit profile metadata."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(
+    write_bytes_atomic(
+        output_path,
         orjson.dumps(result.model_dump(mode="json"), option=orjson.OPT_INDENT_2)
     )
 

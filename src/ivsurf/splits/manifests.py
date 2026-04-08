@@ -8,6 +8,8 @@ from pathlib import Path
 
 import orjson
 
+from ivsurf.io.atomic import write_bytes_atomic
+
 
 @dataclass(frozen=True, slots=True)
 class WalkforwardSplit:
@@ -25,7 +27,7 @@ def serialize_splits(splits: list[WalkforwardSplit], output_path: Path) -> str:
     payload = [asdict(split) for split in splits]
     raw = orjson.dumps(payload, option=orjson.OPT_INDENT_2)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(raw)
+    write_bytes_atomic(output_path, raw)
     return sha256(raw).hexdigest()
 
 

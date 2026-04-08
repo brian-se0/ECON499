@@ -15,6 +15,16 @@ def test_makefile_exposes_official_targets() -> None:
         "sync:",
         "sync-dev:",
         "sync-tracking:",
+        "clean:",
+        "clean-ingest:",
+        "clean-silver:",
+        "clean-surfaces:",
+        "clean-features:",
+        "clean-hpo:",
+        "clean-train:",
+        "clean-stats:",
+        "clean-hedging:",
+        "clean-report:",
         "ingest:",
         "silver:",
         "surfaces:",
@@ -47,5 +57,8 @@ def test_readme_documents_make_as_official_interface() -> None:
     assert "make pipeline" in readme
     assert "make hpo-30" in readme
     assert "make train-100" in readme
+    assert "make clean" in readme
+    assert "make clean-train" in readme
+    assert "never deletes or mutates the protected raw options directory" in readme
     assert "Direct script invocation is not the documented workflow" in readme
     assert "uv run python scripts/01_ingest_cboe.py" not in readme

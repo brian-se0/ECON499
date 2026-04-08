@@ -8,6 +8,7 @@ target_symbol: "^SPX"
 calendar_name: "XNYS"
 timezone: "America/New_York"
 decision_time: "15:45:00"
+sample_start_date: "2004-01-02"
+sample_end_date: "2021-04-09"
 am_settled_roots:
   - "SPX"
-

@@ -18,6 +18,7 @@ from ivsurf.evaluation.interpolation_sensitivity import (
 )
 from ivsurf.reports.figures import write_multi_line_chart, write_ranked_bar_chart
 from ivsurf.reports.tables import (
+    build_mcs_table,
     build_ranked_hedging_table,
     build_ranked_loss_table,
     build_slice_leader_table,
@@ -139,6 +140,19 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
         metric_column="mean_observed_wrmse_total_variance",
     )
     assert ranked_loss["model_name"][0] == "good"
+
+    mcs_table = build_mcs_table(
+        {
+            "superior_models": ["good", "no_change"],
+            "iterations": [],
+            "alpha": 0.10,
+            "block_size": 5,
+            "bootstrap_reps": 100,
+        },
+        all_models=["no_change", "good", "bad"],
+    )
+    assert mcs_table["model_name"].to_list() == ["good", "no_change", "bad"]
+    assert mcs_table["included_in_mcs"].to_list() == [True, True, False]
 
     hedging_summary = pl.DataFrame(
         {

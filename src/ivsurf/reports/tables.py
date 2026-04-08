@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import orjson
 import polars as pl
+
+from ivsurf.io.atomic import write_text_atomic
+from ivsurf.io.parquet import write_csv_frame
 
 
 def _relative_improvement(best_value: float, benchmark_value: float) -> float:
@@ -25,6 +28,9 @@ def build_ranked_loss_table(
 ) -> pl.DataFrame:
     """Add rank and benchmark-relative improvement to the loss summary."""
 
+    if metric_column not in loss_summary.columns:
+        message = f"Loss summary does not contain required metric column {metric_column}."
+        raise ValueError(message)
     if benchmark_model not in loss_summary["model_name"].to_list():
         message = f"Benchmark model {benchmark_model} not found in loss summary."
         raise ValueError(message)
@@ -85,17 +91,27 @@ def build_spa_table(spa_result: Mapping[str, Any]) -> pl.DataFrame:
     return pl.DataFrame([dict(spa_result)])
 
 
-def build_mcs_table(mcs_result: Mapping[str, Any]) -> pl.DataFrame:
+def build_mcs_table(
+    mcs_result: Mapping[str, Any],
+    *,
+    all_models: Sequence[str],
+) -> pl.DataFrame:
     """Normalize the MCS JSON payload into one row per model."""
 
-    included_models = set(mcs_result["included_models"])
-    excluded_models = set(mcs_result["excluded_models"])
-    all_models = sorted(included_models | excluded_models)
+    superior_models = set(mcs_result["superior_models"])
+    all_model_names = sorted(set(all_models))
+    unknown_models = superior_models.difference(all_model_names)
+    if unknown_models:
+        message = (
+            "MCS result contains superior_models missing from loss_summary: "
+            f"{sorted(unknown_models)}."
+        )
+        raise ValueError(message)
     return pl.DataFrame(
         {
-            "model_name": all_models,
-            "included_in_mcs": [model_name in included_models for model_name in all_models],
-            "mcs_alpha": [float(mcs_result["alpha"])] * len(all_models),
+            "model_name": all_model_names,
+            "included_in_mcs": [model_name in superior_models for model_name in all_model_names],
+            "mcs_alpha": [float(mcs_result["alpha"])] * len(all_model_names),
         }
     ).sort(["included_in_mcs", "model_name"], descending=[True, False])
 
@@ -194,8 +210,8 @@ def write_table_artifacts(
                     for row in frame.iter_rows(named=True)
                 ]
             )
-        csv_frame.write_csv(csv_path)
-        md_path.write_text(frame_to_markdown(frame), encoding="utf-8")
+        write_csv_frame(csv_frame, csv_path)
+        write_text_atomic(md_path, frame_to_markdown(frame), encoding="utf-8")
         written_paths.extend([csv_path, md_path])
     return written_paths
 
@@ -203,7 +219,8 @@ def write_table_artifacts(
 def build_report_overview_markdown(
     *,
     benchmark_model: str,
-    metric_column: str,
+    primary_loss_metric: str,
+    summary_metric_column: str,
     ranked_loss_table: pl.DataFrame,
     ranked_hedging_table: pl.DataFrame,
     mcs_table: pl.DataFrame,
@@ -224,10 +241,10 @@ def build_report_overview_markdown(
         "# Report Artifacts",
         "",
         f"- Benchmark model: `{benchmark_model}`",
-        f"- Primary loss metric: `{metric_column}`",
+        f"- Primary loss metric: `{primary_loss_metric}`",
         (
             f"- Best full-sample loss model: `{best_loss['model_name']}` "
-            f"({best_loss[metric_column]:.6f})"
+            f"({best_loss[summary_metric_column]:.6f})"
         ),
         (
             f"- Best hedging revaluation model: `{best_hedging['model_name']}` "

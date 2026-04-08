@@ -1,7 +1,7 @@
 # Report Artifacts
 
 - Benchmark model: `no_change`
-- Primary loss metric: `mean_observed_wrmse_total_variance`
+- Primary loss metric: `observed_wrmse_total_variance`
 - Best full-sample loss model: `no_change` (0.004209)
 - Best hedging revaluation model: `no_change` (0.888332)
 - MCS included models: neural_surface, ridge

@@ -10,14 +10,16 @@ from typing import cast
 import orjson
 import polars as pl
 
+from ivsurf.config import SurfaceGridConfig, load_yaml_config
 from ivsurf.evaluation.alignment import build_forecast_realization_panel
 from ivsurf.evaluation.loss_panels import build_daily_loss_frame
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
 from ivsurf.surfaces.grid import SurfaceGrid
-from ivsurf.surfaces.interpolation import complete_surface
 
-GOLDEN_DIR = Path(__file__).with_name("golden")
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 def _load_script_module(script_path: Path, module_name: str) -> ModuleType:
@@ -39,35 +41,15 @@ def _surface_rows(
     sigma_level: float,
     grid: SurfaceGrid,
 ) -> list[dict[str, object]]:
-    observed = []
-    for maturity_index, maturity_days in enumerate(grid.maturity_days):
-        maturity_years = maturity_days / 365.0
-        row = []
-        for moneyness_index, _moneyness_point in enumerate(grid.moneyness_points):
-            value = (
-                sigma_level * maturity_years
-                + (0.0005 * maturity_index)
-                + (0.0004 * moneyness_index)
-            )
-            row.append(value)
-        observed.append(row)
-    observed[0][1] = float("nan")
-    observed[2][0] = float("nan")
-    completed = complete_surface(
-        observed_total_variance=pl.DataFrame(observed).to_numpy(),
-        maturity_coordinates=grid.maturity_years,
-        moneyness_coordinates=pl.Series(grid.moneyness_points).to_numpy(),
-        interpolation_order=("maturity", "moneyness"),
-        interpolation_cycles=2,
-        total_variance_floor=1.0e-8,
-    ).completed_total_variance
-
     rows: list[dict[str, object]] = []
     for maturity_index, maturity_days in enumerate(grid.maturity_days):
         maturity_years = maturity_days / 365.0
         for moneyness_index, moneyness_point in enumerate(grid.moneyness_points):
-            observed_value = observed[maturity_index][moneyness_index]
-            completed_value = float(completed[maturity_index, moneyness_index])
+            total_variance = (
+                sigma_level * maturity_years
+                + (0.00015 * maturity_index)
+                + (0.00008 * abs(moneyness_point))
+            )
             rows.append(
                 {
                     "quote_date": quote_date,
@@ -75,16 +57,12 @@ def _surface_rows(
                     "maturity_days": maturity_days,
                     "moneyness_index": moneyness_index,
                     "moneyness_point": moneyness_point,
-                    "observed_total_variance": (
-                        None if observed_value != observed_value else observed_value
-                    ),
-                    "observed_iv": None
-                    if observed_value != observed_value
-                    else float((observed_value / maturity_years) ** 0.5),
-                    "completed_total_variance": completed_value,
-                    "completed_iv": float((completed_value / maturity_years) ** 0.5),
-                    "observed_mask": observed_value == observed_value,
-                    "vega_sum": 1.0 if observed_value == observed_value else 0.0,
+                    "observed_total_variance": total_variance,
+                    "observed_iv": float((total_variance / maturity_years) ** 0.5),
+                    "completed_total_variance": total_variance,
+                    "completed_iv": float((total_variance / maturity_years) ** 0.5),
+                    "observed_mask": True,
+                    "vega_sum": 1.0,
                 }
             )
     return rows
@@ -98,7 +76,7 @@ def _forecast_rows(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     model_scales = {
-        "no_change": 0.96,
+        "no_change": 1.02,
         "ridge": 0.995,
         "neural_surface": 1.0,
     }
@@ -108,8 +86,8 @@ def _forecast_rows(
             for moneyness_index, moneyness_point in enumerate(grid.moneyness_points):
                 total_variance = (
                     sigma_level * scale * maturity_years
-                    + (0.0005 * maturity_index)
-                    + (0.0004 * moneyness_index)
+                    + (0.00015 * maturity_index)
+                    + (0.00008 * abs(moneyness_point))
                 )
                 rows.append(
                     {
@@ -126,12 +104,14 @@ def _forecast_rows(
     return rows
 
 
-def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
-    grid = SurfaceGrid(
-        maturity_days=(30, 60, 90),
-        moneyness_points=(-0.1, 0.0, 0.1),
+def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
+    repo_root = _repo_root()
+    surface_config = SurfaceGridConfig.model_validate(
+        load_yaml_config(repo_root / "configs" / "data" / "surface.yaml")
     )
+    grid = SurfaceGrid.from_config(surface_config)
     workflow_label = "hpo_30_trials__train_30_epochs"
+
     gold_dir = tmp_path / "data" / "gold"
     gold_year = gold_dir / "year=2021"
     gold_year.mkdir(parents=True)
@@ -140,8 +120,10 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     silver_dir = tmp_path / "data" / "silver" / "year=2021"
     silver_dir.mkdir(parents=True)
     manifests_dir = tmp_path / "data" / "manifests"
-    (manifests_dir / "stats" / workflow_label).mkdir(parents=True)
-    (manifests_dir / "hedging" / workflow_label).mkdir(parents=True)
+    stats_dir = manifests_dir / "stats" / workflow_label
+    hedging_dir = manifests_dir / "hedging" / workflow_label
+    stats_dir.mkdir(parents=True)
+    hedging_dir.mkdir(parents=True)
 
     quote_dates = [
         date(2021, 1, 4),
@@ -149,18 +131,19 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         date(2021, 1, 6),
         date(2021, 1, 7),
     ]
-    sigma_levels = [0.040, 0.044, 0.049, 0.053]
+    sigma_levels = [0.040, 0.044, 0.048, 0.051]
+
     gold_rows: list[dict[str, object]] = []
     gold_summary_rows: list[dict[str, object]] = []
-    for quote_date, sigma_level in zip(quote_dates, sigma_levels, strict=True):
-        day_rows = _surface_rows(quote_date, sigma_level, grid)
-        day_path = gold_year / f"{quote_date.isoformat()}.parquet"
+    for quote_date_value, sigma_level in zip(quote_dates, sigma_levels, strict=True):
+        day_rows = _surface_rows(quote_date_value, sigma_level, grid)
+        day_path = gold_year / f"{quote_date_value.isoformat()}.parquet"
         pl.DataFrame(day_rows).write_parquet(day_path)
         gold_rows.extend(day_rows)
         gold_summary_rows.append(
             {
                 "gold_path": str(day_path),
-                "quote_date": quote_date.isoformat(),
+                "quote_date": quote_date_value.isoformat(),
                 "observed_cells": sum(1 for row in day_rows if row["observed_mask"]),
             }
         )
@@ -169,40 +152,40 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     )
 
     forecast_rows: list[dict[str, object]] = []
-    for quote_date, target_date, sigma_level in zip(
+    for quote_date_value, target_date_value, sigma_level in zip(
         quote_dates[:-1], quote_dates[1:], sigma_levels[1:], strict=True
     ):
-        forecast_rows.extend(_forecast_rows(quote_date, target_date, sigma_level, grid))
-    pl.DataFrame(forecast_rows).write_parquet(forecast_dir / "forecasts.parquet")
+        forecast_rows.extend(_forecast_rows(quote_date_value, target_date_value, sigma_level, grid))
+    forecast_frame = pl.DataFrame(forecast_rows).sort(
+        ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
+    )
+    forecast_frame.write_parquet(forecast_dir / "forecasts.parquet")
 
     silver_rows = [
-        {"quote_date": quote_date, "active_underlying_price_1545": spot}
-        for quote_date, spot in zip(quote_dates, [100.0, 101.0, 102.0, 103.0], strict=True)
+        {"quote_date": quote_date_value, "active_underlying_price_1545": spot}
+        for quote_date_value, spot in zip(
+            quote_dates,
+            [3700.0, 3712.0, 3724.0, 3738.0],
+            strict=True,
+        )
     ]
     pl.DataFrame(silver_rows).write_parquet(silver_dir / "spots.parquet")
 
     actual_surface_frame = pl.DataFrame(gold_rows).sort(
         ["quote_date", "maturity_index", "moneyness_index"]
     )
-    forecast_frame = pl.DataFrame(forecast_rows).sort(
-        ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
-    )
     panel = build_forecast_realization_panel(
         actual_surface_frame=actual_surface_frame,
         forecast_frame=forecast_frame,
     )
-    panel.write_parquet(
-        manifests_dir / "stats" / workflow_label / "forecast_realization_panel.parquet"
-    )
+    panel.write_parquet(stats_dir / "forecast_realization_panel.parquet")
 
     daily_loss_frame = build_daily_loss_frame(
         panel=panel,
         positive_floor=1.0e-8,
         full_grid_weighting="uniform",
     )
-    daily_loss_frame.write_parquet(
-        manifests_dir / "stats" / workflow_label / "daily_loss_frame.parquet"
-    )
+    daily_loss_frame.write_parquet(stats_dir / "daily_loss_frame.parquet")
 
     loss_metric = "observed_wrmse_total_variance"
     loss_summary = (
@@ -214,18 +197,18 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         )
         .sort(f"mean_{loss_metric}")
     )
-    loss_summary.write_parquet(manifests_dir / "stats" / workflow_label / "loss_summary.parquet")
+    loss_summary.write_parquet(stats_dir / "loss_summary.parquet")
 
     dm_results = [
         {
             "model_a": "no_change",
             "model_b": "ridge",
             "n_obs": 3,
-            "mean_loss_a": 0.0024,
-            "mean_loss_b": 0.0008,
-            "mean_differential": 0.0016,
-            "statistic": 2.1,
-            "p_value": 0.08,
+            "mean_loss_a": 0.0022,
+            "mean_loss_b": 0.0011,
+            "mean_differential": 0.0011,
+            "statistic": 2.4,
+            "p_value": 0.05,
             "alternative": "greater",
             "max_lag": 0,
         },
@@ -233,54 +216,54 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             "model_a": "no_change",
             "model_b": "neural_surface",
             "n_obs": 3,
-            "mean_loss_a": 0.0024,
-            "mean_loss_b": 0.0,
-            "mean_differential": 0.0024,
-            "statistic": 3.4,
-            "p_value": 0.02,
+            "mean_loss_a": 0.0022,
+            "mean_loss_b": 0.0009,
+            "mean_differential": 0.0013,
+            "statistic": 2.8,
+            "p_value": 0.03,
             "alternative": "greater",
             "max_lag": 0,
         },
     ]
-    (manifests_dir / "stats" / workflow_label / "dm_results.json").write_bytes(
+    (stats_dir / "dm_results.json").write_bytes(
         orjson.dumps(dm_results, option=orjson.OPT_INDENT_2)
     )
-    (manifests_dir / "stats" / workflow_label / "spa_result.json").write_bytes(
+    (stats_dir / "spa_result.json").write_bytes(
         orjson.dumps(
             {
                 "benchmark_model": "no_change",
                 "candidate_models": ["ridge", "neural_surface"],
-                "observed_statistic": 2.5,
+                "observed_statistic": 2.7,
                 "p_value": 0.04,
-                "mean_differentials": [0.0007, 0.0024],
+                "mean_differentials": [0.0011, 0.0013],
                 "superior_models_by_mean": ["ridge", "neural_surface"],
-                "block_size": 3,
-                "bootstrap_reps": 50,
+                "block_size": 5,
+                "bootstrap_reps": 500,
             },
             option=orjson.OPT_INDENT_2,
         )
     )
-    (manifests_dir / "stats" / workflow_label / "mcs_result.json").write_bytes(
+    (stats_dir / "mcs_result.json").write_bytes(
         orjson.dumps(
             {
                 "superior_models": ["ridge", "neural_surface"],
                 "iterations": [
                     {
                         "included_models": ["no_change", "ridge", "neural_surface"],
-                        "test_statistic": 2.4,
-                        "p_value": 0.03,
+                        "test_statistic": 2.7,
+                        "p_value": 0.04,
                         "eliminated_model": "no_change",
                     },
                     {
                         "included_models": ["ridge", "neural_surface"],
-                        "test_statistic": 1.1,
+                        "test_statistic": 1.0,
                         "p_value": 0.22,
                         "eliminated_model": None,
                     },
                 ],
                 "alpha": 0.10,
-                "block_size": 3,
-                "bootstrap_reps": 50,
+                "block_size": 5,
+                "bootstrap_reps": 500,
             },
             option=orjson.OPT_INDENT_2,
         )
@@ -332,11 +315,9 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             )
         )
     hedging_results = pl.DataFrame(hedging_rows).sort(["model_name", "quote_date", "target_date"])
-    hedging_results.write_parquet(
-        manifests_dir / "hedging" / workflow_label / "hedging_results.parquet"
-    )
+    hedging_results.write_parquet(hedging_dir / "hedging_results.parquet")
     summarize_hedging_results(hedging_results).write_parquet(
-        manifests_dir / "hedging" / workflow_label / "hedging_summary.parquet"
+        hedging_dir / "hedging_summary.parquet"
     )
 
     raw_config_path = _write_yaml(
@@ -347,74 +328,32 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             f"silver_dir: '{(tmp_path / 'data' / 'silver').as_posix()}'\n"
             f"gold_dir: '{gold_dir.as_posix()}'\n"
             f"manifests_dir: '{manifests_dir.as_posix()}'\n"
-        ),
-    )
-    surface_config_path = _write_yaml(
-        tmp_path / "surface.yaml",
-        (
-            "moneyness_points: [-0.1, 0.0, 0.1]\n"
-            "maturity_days: [30, 60, 90]\n"
-            'interpolation_order: ["maturity", "moneyness"]\n'
-            "interpolation_cycles: 2\n"
-            "total_variance_floor: 1.0e-8\n"
-            "observed_cell_min_count: 1\n"
-        ),
-    )
-    metrics_config_path = _write_yaml(tmp_path / "metrics.yaml", "positive_floor: 1.0e-8\n")
-    stats_config_path = _write_yaml(
-        tmp_path / "stats.yaml",
-        (
-            'loss_metric: "observed_wrmse_total_variance"\n'
-            'benchmark_model: "no_change"\n'
-            'dm_alternative: "greater"\n'
-            "dm_max_lag: 0\n"
-            "spa_block_size: 3\n"
-            "spa_bootstrap_reps: 50\n"
-            "mcs_block_size: 3\n"
-            "mcs_bootstrap_reps: 50\n"
-            "mcs_alpha: 0.10\n"
-            "bootstrap_seed: 7\n"
-            'full_grid_weighting: "uniform"\n'
-        ),
-    )
-    report_config_path = _write_yaml(
-        tmp_path / "report.yaml",
-        (
-            'benchmark_model: "no_change"\n'
-            'primary_loss_metric: "observed_wrmse_total_variance"\n'
-            'interpolation_comparison_order: ["moneyness", "maturity"]\n'
-            "top_models_per_figure: 3\n"
-            "stress_windows:\n"
-            '  - label: "sample_window"\n'
-            '    start_date: "2021-01-05"\n'
-            '    end_date: "2021-01-07"\n'
+            'sample_start_date: "2021-01-04"\n'
+            'sample_end_date: "2021-01-07"\n'
         ),
     )
 
     script_module = _load_script_module(
-        Path.cwd() / "scripts" / "09_make_report_artifacts.py",
-        "report_artifacts_script",
+        repo_root / "scripts" / "09_make_report_artifacts.py",
+        "report_stage_contract_script",
     )
     script_module.main(
         raw_config_path=raw_config_path,
-        surface_config_path=surface_config_path,
-        metrics_config_path=metrics_config_path,
-        stats_config_path=stats_config_path,
-        report_config_path=report_config_path,
+        surface_config_path=repo_root / "configs" / "data" / "surface.yaml",
+        metrics_config_path=repo_root / "configs" / "eval" / "metrics.yaml",
+        stats_config_path=repo_root / "configs" / "eval" / "stats_tests.yaml",
+        report_config_path=repo_root / "configs" / "eval" / "report_artifacts.yaml",
     )
 
     report_dir = manifests_dir / "report_artifacts" / workflow_label
-    ranked_loss_csv = (report_dir / "tables" / "ranked_loss_summary.csv").read_text(
+    ranked_loss_summary = (report_dir / "tables" / "ranked_loss_summary.csv").read_text(
         encoding="utf-8"
     )
-    slice_leaders_csv = (report_dir / "tables" / "slice_leaders.csv").read_text(encoding="utf-8")
-    index_md = (report_dir / "index.md").read_text(encoding="utf-8")
+    mcs_table = (report_dir / "tables" / "mcs_result.csv").read_text(encoding="utf-8")
+    report_index = (report_dir / "index.md").read_text(encoding="utf-8")
 
-    assert ranked_loss_csv == (GOLDEN_DIR / "ranked_loss_summary.csv").read_text(encoding="utf-8")
-    assert slice_leaders_csv == (GOLDEN_DIR / "slice_leaders.csv").read_text(encoding="utf-8")
-    assert index_md == (GOLDEN_DIR / "report_index.md").read_text(encoding="utf-8")
-
-    run_manifest_files = sorted(
-        (manifests_dir / "runs" / "09_make_report_artifacts").glob("*.json")
-    )
-    assert len(run_manifest_files) == 1
+    assert "mean_observed_wrmse_total_variance" in ranked_loss_summary
+    assert "included_in_mcs" in mcs_table
+    assert "no_change,false" in mcs_table
+    assert "ridge,true" in mcs_table
+    assert "Primary loss metric: `observed_wrmse_total_variance`" in report_index

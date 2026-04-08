@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -11,10 +11,13 @@ import typer
 from ivsurf.cleaning.option_filters import valid_option_rows
 from ivsurf.config import RawDataConfig, SurfaceGridConfig, load_yaml_config
 from ivsurf.evaluation.metrics import total_variance_to_iv
+from ivsurf.io.atomic import write_bytes_atomic
 from ivsurf.io.parquet import write_parquet_frame
 from ivsurf.progress import create_progress, iter_with_progress
+from ivsurf.qc.sample_window import require_quote_date_in_sample_window, sample_window_label
 from ivsurf.qc.schema_checks import assert_required_columns
 from ivsurf.reproducibility import write_run_manifest
+from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.surfaces.aggregation import aggregate_daily_surface
 from ivsurf.surfaces.arbitrage_diagnostics import summarize_diagnostics
 from ivsurf.surfaces.grid import SurfaceGrid, assign_grid_indices
@@ -46,6 +49,14 @@ def main(
     silver_files = sorted(raw_config.silver_dir.glob("year=*/*.parquet"))
     if limit is not None:
         silver_files = silver_files[:limit]
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "03_build_surfaces"),
+        stage_name="03_build_surfaces",
+        context_hash=build_resume_context_hash(
+            config_paths=[raw_config_path, surface_config_path],
+            input_artifact_paths=silver_files,
+        ),
+    )
 
     summary_rows: list[dict[str, object]] = []
     maturity_years = grid.maturity_years
@@ -55,6 +66,13 @@ def main(
             silver_files,
             description="Stage 03 constructing gold surfaces",
         ):
+            item_id = str(silver_path.resolve())
+            if resumer.item_complete(item_id):
+                summary_rows.append(resumer.metadata_for(item_id))
+                continue
+            stale_output_paths = resumer.output_paths_for(item_id)
+            if stale_output_paths:
+                resumer.clear_item(item_id, output_paths=stale_output_paths)
             silver_frame = pl.read_parquet(silver_path)
             assert_required_columns(
                 silver_frame.columns,
@@ -69,14 +87,27 @@ def main(
                 ),
                 dataset_name=str(silver_path),
             )
+            quote_date = silver_frame["quote_date"][0]
+            if not isinstance(quote_date, date):
+                message = f"Unexpected quote_date type in {silver_path}"
+                raise TypeError(message)
+            require_quote_date_in_sample_window(
+                quote_date,
+                raw_config,
+                context=f"Stage 03 silver artifact {silver_path}",
+            )
             valid_frame = valid_option_rows(silver_frame)
             if valid_frame.is_empty():
-                summary_rows.append(
-                    {
-                        "silver_path": str(silver_path),
-                        "status": "skipped_no_valid_rows",
-                    }
+                summary_row = {
+                    "silver_path": str(silver_path),
+                    "status": "skipped_no_valid_rows",
+                }
+                resumer.mark_complete(
+                    item_id,
+                    output_paths=[],
+                    metadata=summary_row,
                 )
+                summary_rows.append(summary_row)
                 continue
 
             assigned = assign_grid_indices(frame=valid_frame, grid=grid)
@@ -120,29 +151,38 @@ def main(
             )
             output_path = _gold_path(silver_path=silver_path, raw_config=raw_config)
             write_parquet_frame(output_frame, output_path)
-            summary_rows.append(
-                {
-                    "gold_path": str(output_path),
-                    "quote_date": str(output_frame["quote_date"][0]),
-                    "observed_cells": int(output_frame["observed_mask"].sum()),
-                }
+            summary_row = {
+                "gold_path": str(output_path),
+                "quote_date": str(output_frame["quote_date"][0]),
+                "observed_cells": int(output_frame["observed_mask"].sum()),
+            }
+            resumer.mark_complete(
+                item_id,
+                output_paths=[output_path],
+                metadata=summary_row,
             )
+            summary_rows.append(summary_row)
 
     summary_path = raw_config.manifests_dir / "gold_surface_summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_bytes(orjson.dumps(summary_rows, option=orjson.OPT_INDENT_2))
+    write_bytes_atomic(summary_path, orjson.dumps(summary_rows, option=orjson.OPT_INDENT_2))
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
         repo_root=Path.cwd(),
         script_name="03_build_surfaces",
         started_at=started_at,
         config_paths=[raw_config_path, surface_config_path],
-        input_artifact_paths=[raw_config.manifests_dir / "silver_build_summary.json"],
+        input_artifact_paths=[
+            raw_config.manifests_dir / "silver_build_summary.json",
+            *silver_files,
+        ],
         output_artifact_paths=[summary_path],
-        data_manifest_paths=[raw_config.manifests_dir / "silver_build_summary.json"],
+        data_manifest_paths=silver_files,
         extra_metadata={
             "limit": limit,
             "silver_files_processed": len(silver_files),
+            "sample_window": sample_window_label(raw_config),
+            "resume_context_hash": resumer.context_hash,
         },
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_experiment_name=mlflow_experiment_name,

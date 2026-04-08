@@ -17,7 +17,7 @@ else
 LIMIT_ARG := --limit $(LIMIT)
 endif
 
-.PHONY: help sync sync-dev sync-tracking lint test typecheck check ingest silver surfaces features hpo hpo-all hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
+.PHONY: help sync sync-dev sync-tracking lint test typecheck check clean clean-ingest clean-silver clean-surfaces clean-features clean-hpo clean-train clean-stats clean-hedging clean-report ingest silver surfaces features hpo hpo-all hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
 
 help:
 	@Write-Host "Official ECON499 workflow targets:"
@@ -30,12 +30,16 @@ help:
 	@Write-Host "  make train-100        - walk-forward training/forecasting with the 100-epoch profile"
 	@Write-Host "  make pipeline-30      - full official pipeline with 30-trial HPO + 30-epoch training"
 	@Write-Host "  make pipeline-100     - full official pipeline with 100-trial HPO + 100-epoch training"
+	@Write-Host "  make clean            - remove all derived artifacts across every pipeline stage"
+	@Write-Host "  make clean-<stage>    - clean one stage and every downstream stage"
 	@Write-Host "  make check            - run ruff, pytest, and mypy"
 	@Write-Host "Optional variables:"
 	@Write-Host "  LIMIT=<n>             - limit files for stages 01-03 during smoke runs"
 	@Write-Host "  MODEL=<name>          - select the model for make hpo / make tune"
 	@Write-Host "  HPO_PROFILE=<name>    - one of hpo_30_trials or hpo_100_trials"
 	@Write-Host "  TRAIN_PROFILE=<name>  - one of train_30_epochs or train_100_epochs"
+	@Write-Host "Clean stages:"
+	@Write-Host "  ingest silver surfaces features hpo train stats hedging report"
 
 sync:
 	$(UV) sync
@@ -56,6 +60,36 @@ typecheck:
 	$(UV) run $(PYTHON) -m mypy src tests
 
 check: lint test typecheck
+
+clean:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py all --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-ingest:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py ingest --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-silver:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py silver --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-surfaces:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py surfaces --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-features:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py features --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-hpo:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py hpo --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-train:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py train --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-stats:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py stats --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-hedging:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py hedging --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
+
+clean-report:
+	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py report --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
 
 ingest:
 	$(UV) run $(PYTHON) scripts/01_ingest_cboe.py $(LIMIT_ARG)

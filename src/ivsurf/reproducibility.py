@@ -16,6 +16,8 @@ from typing import Any
 import orjson
 import torch
 
+from ivsurf.io.atomic import write_bytes_atomic
+
 
 @dataclass(frozen=True, slots=True)
 class ArtifactRecord:
@@ -250,7 +252,8 @@ def write_run_manifest(
     run_dir.mkdir(parents=True, exist_ok=True)
     timestamp = finished_at.strftime("%Y%m%dT%H%M%SZ")
     manifest_path = run_dir / f"{timestamp}_{script_name}.json"
-    manifest_path.write_bytes(
+    write_bytes_atomic(
+        manifest_path,
         orjson.dumps(manifest, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
     )
 
@@ -262,7 +265,8 @@ def write_run_manifest(
             experiment_name=mlflow_experiment_name,
         )
         manifest["mlflow_run_id"] = run_id
-        manifest_path.write_bytes(
+        write_bytes_atomic(
+            manifest_path,
             orjson.dumps(manifest, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
         )
 

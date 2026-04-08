@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, cast
@@ -14,6 +15,7 @@ from ivsurf.config import RawDataConfig
 from ivsurf.exceptions import DataValidationError, SchemaDriftError
 from ivsurf.io.parquet import write_parquet_frame
 from ivsurf.qc.raw_checks import assert_single_quote_date, assert_target_symbol_only
+from ivsurf.qc.sample_window import quote_date_in_sample_window
 from ivsurf.qc.schema_checks import assert_non_null_columns
 from ivsurf.schemas import RAW_COLUMNS, RAW_POLARS_SCHEMA, validate_raw_columns
 
@@ -23,8 +25,10 @@ class IngestionResult:
     """Summary for one ingested raw zip."""
 
     source_zip: Path
-    bronze_path: Path
+    quote_date: date
+    bronze_path: Path | None
     row_count: int
+    status: str
 
 
 def list_raw_zip_files(config: RawDataConfig) -> list[Path]:
@@ -47,11 +51,6 @@ def _extract_single_csv(zip_path: Path, temp_dir: Path) -> Path:
 
 def ingest_one_zip(zip_path: Path, config: RawDataConfig) -> IngestionResult:
     """Read one daily zip, filter to SPX, and write partitioned parquet."""
-
-    output_year = zip_path.stem.rsplit("_", maxsplit=1)[-1][:4]
-    output_dir = config.bronze_dir / f"year={output_year}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    bronze_path = output_dir / f"{zip_path.stem}.parquet"
 
     with TemporaryDirectory() as temp_dir_name:
         temp_dir = Path(temp_dir_name)
@@ -94,8 +93,30 @@ def ingest_one_zip(zip_path: Path, config: RawDataConfig) -> IngestionResult:
         dataset_name=zip_path.name,
     )
 
+    quote_date = frame["quote_date"][0]
+    if not isinstance(quote_date, date):
+        message = f"{zip_path.name} quote_date must be parsed as a Polars Date."
+        raise TypeError(message)
+    if not quote_date_in_sample_window(quote_date, config):
+        return IngestionResult(
+            source_zip=zip_path,
+            quote_date=quote_date,
+            bronze_path=None,
+            row_count=frame.height,
+            status="skipped_out_of_sample_window",
+        )
+
+    output_dir = config.bronze_dir / f"year={quote_date.year}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    bronze_path = output_dir / f"{zip_path.stem}.parquet"
     write_parquet_frame(frame, bronze_path)
-    return IngestionResult(source_zip=zip_path, bronze_path=bronze_path, row_count=frame.height)
+    return IngestionResult(
+        source_zip=zip_path,
+        quote_date=quote_date,
+        bronze_path=bronze_path,
+        row_count=frame.height,
+        status="written",
+    )
 
 
 def ingest_all(config: RawDataConfig, limit: int | None = None) -> list[IngestionResult]:

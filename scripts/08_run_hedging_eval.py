@@ -8,15 +8,13 @@ import polars as pl
 import typer
 
 from ivsurf.config import HpoProfileConfig, RawDataConfig, TrainingProfileConfig, load_yaml_config
-from ivsurf.evaluation.alignment import (
-    load_actual_surface_frame,
-    load_daily_spot_frame,
-    load_forecast_frame,
-)
+from ivsurf.evaluation.alignment import load_actual_surface_frame, load_daily_spot_frame
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
+from ivsurf.io.parquet import read_parquet_files, write_parquet_frame
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
+from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.workflow import resolve_workflow_run_paths
 
 app = typer.Typer(add_completion=False)
@@ -25,13 +23,6 @@ app = typer.Typer(add_completion=False)
 def _actual_surface_lookup(actual_surface_frame: pl.DataFrame) -> dict[object, pl.DataFrame]:
     groups = actual_surface_frame.partition_by("quote_date", as_dict=True)
     return {key[0]: value for key, value in groups.items()}
-
-
-def _forecast_surface_groups(forecast_frame: pl.DataFrame) -> list[pl.DataFrame]:
-    return forecast_frame.partition_by(
-        ["model_name", "quote_date", "target_date"],
-        maintain_order=True,
-    )
 
 
 @app.command()
@@ -56,79 +47,127 @@ def main(
         training_profile_name=training_profile.profile_name,
     )
 
+    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    output_dir = workflow_paths.hedging_dir
+    by_model_dir = output_dir / "by_model"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    by_model_dir.mkdir(parents=True, exist_ok=True)
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "08_run_hedging_eval"),
+        stage_name="08_run_hedging_eval",
+        context_hash=build_resume_context_hash(
+            config_paths=[
+                raw_config_path,
+                hedging_config_path,
+                hpo_profile_config_path,
+                training_profile_config_path,
+            ],
+            input_artifact_paths=[
+                raw_config.manifests_dir / "gold_surface_summary.json",
+                raw_config.manifests_dir / "silver_build_summary.json",
+                *forecast_paths,
+            ],
+            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+        ),
+    )
+
     actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
-    forecast_frame = load_forecast_frame(workflow_paths.forecast_dir)
     spot_frame = load_daily_spot_frame(raw_config.silver_dir)
     spot_lookup = {
-        row["quote_date"]: float(row["spot_1545"])
-        for row in spot_frame.iter_rows(named=True)
+        row["quote_date"]: float(row["spot_1545"]) for row in spot_frame.iter_rows(named=True)
     }
     actual_lookup = _actual_surface_lookup(actual_surface_frame)
-    forecast_groups = _forecast_surface_groups(forecast_frame)
 
-    results = []
+    model_output_paths: list[Path] = []
     with create_progress() as progress:
-        task_id = progress.add_task("Stage 08 hedging evaluation", total=len(forecast_groups))
-        for group in forecast_groups:
-            model_name = str(group["model_name"][0])
-            quote_date = group["quote_date"][0]
-            target_date = group["target_date"][0]
-            progress.update(
-                task_id,
-                description=f"Stage 08 hedging {model_name}: {quote_date} -> {target_date}",
+        task_id = progress.add_task("Stage 08 hedging evaluation", total=len(forecast_paths))
+        for forecast_path in forecast_paths:
+            forecast_frame = pl.read_parquet(forecast_path).sort(
+                ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
             )
-            if quote_date not in actual_lookup or target_date not in actual_lookup:
-                message = (
-                    f"Missing actual surface for quote_date={quote_date} "
-                    f"or target_date={target_date}."
-                )
+            if forecast_frame.is_empty():
+                message = f"Forecast artifact {forecast_path} is empty."
                 raise ValueError(message)
-            if quote_date not in spot_lookup or target_date not in spot_lookup:
-                message = (
-                    f"Missing spot state for quote_date={quote_date} "
-                    f"or target_date={target_date}."
+            model_name = str(forecast_frame["model_name"][0])
+            model_output_path = by_model_dir / f"{model_name}.parquet"
+            model_output_paths.append(model_output_path)
+            if resumer.item_complete(model_name, required_output_paths=[model_output_path]):
+                progress.update(
+                    task_id,
+                    description=f"Stage 08 resume: skipping completed model {model_name}",
                 )
-                raise ValueError(message)
+                progress.advance(task_id)
+                continue
+            resumer.clear_item(model_name, output_paths=[model_output_path])
+            progress.update(task_id, description=f"Stage 08 hedging model {model_name}")
 
-            result = evaluate_model_hedging(
-                model_name=model_name,
-                quote_date=quote_date,
-                target_date=target_date,
-                trade_spot=spot_lookup[quote_date],
-                target_spot=spot_lookup[target_date],
-                actual_surface_t=surface_interpolator_from_frame(
-                    actual_lookup[quote_date],
-                    total_variance_column="completed_total_variance",
-                ),
-                actual_surface_t1=surface_interpolator_from_frame(
-                    actual_lookup[target_date],
-                    total_variance_column="completed_total_variance",
-                ),
-                predicted_surface_t1=surface_interpolator_from_frame(
-                    group,
-                    total_variance_column="predicted_total_variance",
-                ),
-                rate=float(hedging_config["risk_free_rate"]),
-                level_notional=float(hedging_config["level_notional"]),
-                skew_notional=float(hedging_config["skew_notional"]),
-                calendar_notional=float(hedging_config["calendar_notional"]),
-                skew_moneyness_abs=float(hedging_config["skew_moneyness_abs"]),
-                short_maturity_days=int(hedging_config["short_maturity_days"]),
-                long_maturity_days=int(hedging_config["long_maturity_days"]),
-                hedge_maturity_days=int(hedging_config["hedge_maturity_days"]),
-                hedge_straddle_moneyness=float(hedging_config["hedge_straddle_moneyness"]),
+            results: list[dict[str, object]] = []
+            for group in forecast_frame.partition_by(
+                ["model_name", "quote_date", "target_date"],
+                maintain_order=True,
+            ):
+                quote_date = group["quote_date"][0]
+                target_date = group["target_date"][0]
+                if quote_date not in actual_lookup or target_date not in actual_lookup:
+                    message = (
+                        f"Missing actual surface for quote_date={quote_date} "
+                        f"or target_date={target_date}."
+                    )
+                    raise ValueError(message)
+                if quote_date not in spot_lookup or target_date not in spot_lookup:
+                    message = (
+                        f"Missing spot state for quote_date={quote_date} "
+                        f"or target_date={target_date}."
+                    )
+                    raise ValueError(message)
+
+                result = evaluate_model_hedging(
+                    model_name=model_name,
+                    quote_date=quote_date,
+                    target_date=target_date,
+                    trade_spot=spot_lookup[quote_date],
+                    target_spot=spot_lookup[target_date],
+                    actual_surface_t=surface_interpolator_from_frame(
+                        actual_lookup[quote_date],
+                        total_variance_column="completed_total_variance",
+                    ),
+                    actual_surface_t1=surface_interpolator_from_frame(
+                        actual_lookup[target_date],
+                        total_variance_column="completed_total_variance",
+                    ),
+                    predicted_surface_t1=surface_interpolator_from_frame(
+                        group,
+                        total_variance_column="predicted_total_variance",
+                    ),
+                    rate=float(hedging_config["risk_free_rate"]),
+                    level_notional=float(hedging_config["level_notional"]),
+                    skew_notional=float(hedging_config["skew_notional"]),
+                    calendar_notional=float(hedging_config["calendar_notional"]),
+                    skew_moneyness_abs=float(hedging_config["skew_moneyness_abs"]),
+                    short_maturity_days=int(hedging_config["short_maturity_days"]),
+                    long_maturity_days=int(hedging_config["long_maturity_days"]),
+                    hedge_maturity_days=int(hedging_config["hedge_maturity_days"]),
+                    hedge_straddle_moneyness=float(hedging_config["hedge_straddle_moneyness"]),
+                )
+                results.append(asdict(result))
+
+            results_frame = pl.DataFrame(results).sort(["model_name", "quote_date", "target_date"])
+            write_parquet_frame(results_frame, model_output_path)
+            resumer.mark_complete(
+                model_name,
+                output_paths=[model_output_path],
+                metadata={"model_name": model_name, "n_results": results_frame.height},
             )
-            results.append(asdict(result))
             progress.advance(task_id)
 
-    output_dir = workflow_paths.hedging_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
-    results_frame = pl.DataFrame(results).sort(["model_name", "quote_date", "target_date"])
-    results_frame.write_parquet(output_dir / "hedging_results.parquet", compression="zstd")
-
+    results_frame = read_parquet_files(model_output_paths).sort(
+        ["model_name", "quote_date", "target_date"]
+    )
+    hedging_results_path = output_dir / "hedging_results.parquet"
+    hedging_summary_path = output_dir / "hedging_summary.parquet"
+    write_parquet_frame(results_frame, hedging_results_path)
     summary_frame = summarize_hedging_results(results_frame)
-    summary_frame.write_parquet(output_dir / "hedging_summary.parquet", compression="zstd")
-    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    write_parquet_frame(summary_frame, hedging_summary_path)
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
         repo_root=Path.cwd(),
@@ -145,10 +184,7 @@ def main(
             raw_config.manifests_dir / "silver_build_summary.json",
             *forecast_paths,
         ],
-        output_artifact_paths=[
-            output_dir / "hedging_results.parquet",
-            output_dir / "hedging_summary.parquet",
-        ],
+        output_artifact_paths=[hedging_results_path, hedging_summary_path, *model_output_paths],
         data_manifest_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
             raw_config.manifests_dir / "silver_build_summary.json",
@@ -158,6 +194,7 @@ def main(
             "benchmark_model": "no_change",
             "n_results": results_frame.height,
             "workflow_run_label": workflow_paths.run_label,
+            "resume_context_hash": resumer.context_hash,
         },
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_experiment_name=mlflow_experiment_name,

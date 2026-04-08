@@ -26,6 +26,8 @@ from ivsurf.evaluation.interpolation_sensitivity import (
     summarize_interpolation_sensitivity,
 )
 from ivsurf.evaluation.slice_reports import build_slice_metric_frame
+from ivsurf.io.atomic import write_text_atomic
+from ivsurf.io.parquet import write_csv_frame, write_parquet_frame
 from ivsurf.progress import create_progress
 from ivsurf.reports.figures import write_multi_line_chart, write_ranked_bar_chart
 from ivsurf.reports.tables import (
@@ -39,6 +41,7 @@ from ivsurf.reports.tables import (
     write_table_artifacts,
 )
 from ivsurf.reproducibility import write_run_manifest
+from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.workflow import resolve_workflow_run_paths
 
@@ -52,6 +55,14 @@ def _require_file(path: Path) -> Path:
     return path
 
 
+def _require_columns(frame: pl.DataFrame, *, columns: tuple[str, ...], artifact_name: str) -> None:
+    missing = [column for column in columns if column not in frame.columns]
+    if not missing:
+        return
+    message = f"{artifact_name} is missing required columns: {missing}."
+    raise ValueError(message)
+
+
 def _write_frame_bundle(
     output_dir: Path,
     name: str,
@@ -62,14 +73,14 @@ def _write_frame_bundle(
     output_dir.mkdir(parents=True, exist_ok=True)
     parquet_path = output_dir / f"{name}.parquet"
     csv_path = output_dir / f"{name}.csv"
-    frame.write_parquet(parquet_path, compression="zstd")
-    frame.write_csv(csv_path)
+    write_parquet_frame(frame, parquet_path)
+    write_csv_frame(frame, csv_path)
     written = [parquet_path, csv_path]
     if include_markdown:
         from ivsurf.reports.tables import frame_to_markdown
 
         markdown_path = output_dir / f"{name}.md"
-        markdown_path.write_text(frame_to_markdown(frame), encoding="utf-8")
+        write_text_atomic(markdown_path, frame_to_markdown(frame), encoding="utf-8")
         written.append(markdown_path)
     return written
 
@@ -126,6 +137,35 @@ def main(
     mcs_result_path = _require_file(stats_dir / "mcs_result.json")
     hedging_results_path = _require_file(hedging_dir / "hedging_results.parquet")
     hedging_summary_path = _require_file(hedging_dir / "hedging_summary.parquet")
+    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "09_make_report_artifacts"),
+        stage_name="09_make_report_artifacts",
+        context_hash=build_resume_context_hash(
+            config_paths=[
+                raw_config_path,
+                surface_config_path,
+                metrics_config_path,
+                stats_config_path,
+                report_config_path,
+                hpo_profile_config_path,
+                training_profile_config_path,
+            ],
+            input_artifact_paths=[
+                panel_path,
+                daily_loss_path,
+                loss_summary_path,
+                dm_results_path,
+                spa_result_path,
+                mcs_result_path,
+                hedging_results_path,
+                hedging_summary_path,
+                raw_config.manifests_dir / "gold_surface_summary.json",
+                *forecast_paths,
+            ],
+            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+        ),
+    )
 
     with create_progress() as progress:
         task_id = progress.add_task("Stage 09 report artifact generation", total=6)
@@ -167,11 +207,17 @@ def main(
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 09 building report tables")
-        metric_column = report_config.primary_loss_metric
+        summary_mean_column = f"mean_{report_config.primary_loss_metric}"
+        summary_std_column = f"std_{report_config.primary_loss_metric}"
+        _require_columns(
+            loss_summary,
+            columns=(summary_mean_column, summary_std_column, "model_name"),
+            artifact_name="loss_summary.parquet",
+        )
         ranked_loss_table = build_ranked_loss_table(
             loss_summary=loss_summary,
             benchmark_model=report_config.benchmark_model,
-            metric_column=metric_column,
+            metric_column=summary_mean_column,
         )
         ranked_hedging_table = build_ranked_hedging_table(
             hedging_summary=hedging_summary,
@@ -179,64 +225,130 @@ def main(
         )
         dm_table = build_dm_results_table(dm_results)
         spa_table = build_spa_table(spa_result)
-        mcs_table = build_mcs_table(mcs_result)
+        mcs_table = build_mcs_table(
+            mcs_result,
+            all_models=loss_summary["model_name"].to_list(),
+        )
         slice_leader_table = build_slice_leader_table(
             slice_metric_frame=slice_metric_frame,
             benchmark_model=report_config.benchmark_model,
             metric_column="wrmse_total_variance",
         )
-
-        table_paths = write_table_artifacts(
-            tables_dir,
-            tables={
-                "ranked_loss_summary": ranked_loss_table,
-                "ranked_hedging_summary": ranked_hedging_table,
-                "dm_results": dm_table,
-                "spa_result": spa_table,
-                "mcs_result": mcs_table,
-                "slice_leaders": slice_leader_table,
-                "arbitrage_diagnostic_summary": diagnostic_summary,
-                "interpolation_sensitivity_summary": interpolation_summary,
-            },
+        table_names = (
+            "ranked_loss_summary",
+            "ranked_hedging_summary",
+            "dm_results",
+            "spa_result",
+            "mcs_result",
+            "slice_leaders",
+            "arbitrage_diagnostic_summary",
+            "interpolation_sensitivity_summary",
         )
+        table_output_paths = [
+            path
+            for name in table_names
+            for path in (tables_dir / f"{name}.csv", tables_dir / f"{name}.md")
+        ]
+
+        if resumer.item_complete("report_tables", required_output_paths=table_output_paths):
+            table_paths = table_output_paths
+        else:
+            resumer.clear_item("report_tables", output_paths=table_output_paths)
+            table_paths = write_table_artifacts(
+                tables_dir,
+                tables={
+                    "ranked_loss_summary": ranked_loss_table,
+                    "ranked_hedging_summary": ranked_hedging_table,
+                    "dm_results": dm_table,
+                    "spa_result": spa_table,
+                    "mcs_result": mcs_table,
+                    "slice_leaders": slice_leader_table,
+                    "arbitrage_diagnostic_summary": diagnostic_summary,
+                    "interpolation_sensitivity_summary": interpolation_summary,
+                },
+            )
+            resumer.mark_complete(
+                "report_tables",
+                output_paths=table_paths,
+                metadata={"table_count": len(table_names)},
+            )
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 09 writing detailed report frames")
-        detail_paths: list[Path] = []
-        detail_paths.extend(
-            _write_frame_bundle(details_dir, "slice_metric_frame", slice_metric_frame)
+        detail_names = (
+            "slice_metric_frame",
+            "forecast_diagnostics",
+            "actual_diagnostics",
+            "combined_diagnostics",
+            "interpolation_sensitivity",
+            "daily_loss_frame",
+            "hedging_results",
         )
-        detail_paths.extend(
-            _write_frame_bundle(details_dir, "forecast_diagnostics", forecast_diagnostics)
-        )
-        detail_paths.extend(
-            _write_frame_bundle(details_dir, "actual_diagnostics", actual_diagnostics)
-        )
-        detail_paths.extend(
-            _write_frame_bundle(details_dir, "combined_diagnostics", combined_diagnostics)
-        )
-        detail_paths.extend(
-            _write_frame_bundle(
-                details_dir,
-                "interpolation_sensitivity",
-                interpolation_sensitivity,
+        detail_output_paths = [
+            path
+            for name in detail_names
+            for path in (details_dir / f"{name}.parquet", details_dir / f"{name}.csv")
+        ]
+        if resumer.item_complete("report_details", required_output_paths=detail_output_paths):
+            detail_paths = detail_output_paths
+        else:
+            resumer.clear_item("report_details", output_paths=detail_output_paths)
+            detail_paths = []
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "slice_metric_frame", slice_metric_frame)
             )
-        )
-        detail_paths.extend(_write_frame_bundle(details_dir, "daily_loss_frame", daily_loss_frame))
-        detail_paths.extend(_write_frame_bundle(details_dir, "hedging_results", hedging_results))
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "forecast_diagnostics", forecast_diagnostics)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "actual_diagnostics", actual_diagnostics)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "combined_diagnostics", combined_diagnostics)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(
+                    details_dir,
+                    "interpolation_sensitivity",
+                    interpolation_sensitivity,
+                )
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "daily_loss_frame", daily_loss_frame)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "hedging_results", hedging_results)
+            )
+            resumer.mark_complete(
+                "report_details",
+                output_paths=detail_paths,
+                metadata={"detail_bundle_count": len(detail_names)},
+            )
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 09 rendering report figures")
         top_models = tuple(
             ranked_loss_table.head(report_config.top_models_per_figure)["model_name"].to_list()
         )
-        figure_paths = [
+        expected_figure_paths = [
+            figures_dir / "loss_ranking.svg",
+            figures_dir / "hedging_ranking.svg",
+            figures_dir / "calendar_violation_ranking.svg",
+            figures_dir / "interpolation_sensitivity_worst_days.svg",
+            figures_dir / "maturity_slice_wrmse.svg",
+            figures_dir / "moneyness_slice_wrmse.svg",
+        ]
+        if resumer.item_complete("report_figures", required_output_paths=expected_figure_paths):
+            figure_paths = expected_figure_paths
+        else:
+            resumer.clear_item("report_figures", output_paths=expected_figure_paths)
+            figure_paths = [
             write_ranked_bar_chart(
                 ranked_loss_table,
                 label_column="model_name",
-                value_column=metric_column,
+                value_column=summary_mean_column,
                 output_path=figures_dir / "loss_ranking.svg",
-                title=f"Loss Ranking by {metric_column}",
+                title=f"Loss Ranking by mean {report_config.primary_loss_metric}",
                 top_n=report_config.top_models_per_figure,
             ),
             write_ranked_bar_chart(
@@ -291,24 +403,37 @@ def main(
                 y_label="WRMSE total variance",
                 include_series=top_models,
             ),
-        ]
+            ]
+            resumer.mark_complete(
+                "report_figures",
+                output_paths=figure_paths,
+                metadata={"figure_count": len(figure_paths)},
+            )
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 09 writing report index")
         overview_path = report_dir / "index.md"
-        overview_path.parent.mkdir(parents=True, exist_ok=True)
-        overview_path.write_text(
-            build_report_overview_markdown(
-                benchmark_model=report_config.benchmark_model,
-                metric_column=metric_column,
-                ranked_loss_table=ranked_loss_table,
-                ranked_hedging_table=ranked_hedging_table,
-                mcs_table=mcs_table,
-                slice_leader_table=slice_leader_table,
-                interpolation_summary=interpolation_summary,
-            ),
-            encoding="utf-8",
-        )
+        if not resumer.item_complete("report_index", required_output_paths=[overview_path]):
+            resumer.clear_item("report_index", output_paths=[overview_path])
+            write_text_atomic(
+                overview_path,
+                build_report_overview_markdown(
+                    benchmark_model=report_config.benchmark_model,
+                    primary_loss_metric=report_config.primary_loss_metric,
+                    summary_metric_column=summary_mean_column,
+                    ranked_loss_table=ranked_loss_table,
+                    ranked_hedging_table=ranked_hedging_table,
+                    mcs_table=mcs_table,
+                    slice_leader_table=slice_leader_table,
+                    interpolation_summary=interpolation_summary,
+                ),
+                encoding="utf-8",
+            )
+            resumer.mark_complete(
+                "report_index",
+                output_paths=[overview_path],
+                metadata={"report_dir": str(report_dir)},
+            )
         progress.advance(task_id)
 
     run_manifest_path = write_run_manifest(
@@ -352,6 +477,7 @@ def main(
             "report_dir": str(report_dir),
             "top_models_for_figures": list(top_models),
             "workflow_run_label": workflow_paths.run_label,
+            "resume_context_hash": resumer.context_hash,
         },
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_experiment_name=mlflow_experiment_name,

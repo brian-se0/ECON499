@@ -19,6 +19,7 @@ from ivsurf.evaluation.forecast_store import write_forecasts
 from ivsurf.models.base import dataset_to_matrices
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
+from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.splits.manifests import load_splits
 from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.training.fit_lightgbm import fit_and_predict_lightgbm
@@ -82,12 +83,41 @@ def main(
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
     )
+    split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
+    tuning_manifest_paths = [
+        tuning_manifest_path(raw_config.manifests_dir, hpo_profile.profile_name, model_name)
+        for model_name in TUNABLE_MODEL_NAMES
+    ]
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "06_run_walkforward"),
+        stage_name="06_run_walkforward",
+        context_hash=build_resume_context_hash(
+            config_paths=[
+                raw_config_path,
+                surface_config_path,
+                ridge_config_path,
+                elasticnet_config_path,
+                har_config_path,
+                lightgbm_config_path,
+                random_forest_config_path,
+                neural_config_path,
+                hpo_profile_config_path,
+                training_profile_config_path,
+            ],
+            input_artifact_paths=[
+                raw_config.gold_dir / "daily_features.parquet",
+                split_manifest_path,
+                *tuning_manifest_paths,
+            ],
+            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+        ),
+    )
 
     feature_frame = pl.read_parquet(
         raw_config.gold_dir / "daily_features.parquet"
     ).sort("quote_date")
     matrices = dataset_to_matrices(feature_frame)
-    splits = load_splits(raw_config.manifests_dir / "walkforward_splits.json")
+    splits = load_splits(split_manifest_path)
 
     ridge_params = load_yaml_config(ridge_config_path)
     elasticnet_params = load_yaml_config(elasticnet_config_path)
@@ -131,6 +161,15 @@ def main(
     with create_progress() as progress:
         task_id = progress.add_task("Stage 06 walk-forward forecasting", total=total_steps)
         for model_name in model_names:
+            output_path = workflow_paths.forecast_dir / f"{model_name}.parquet"
+            if resumer.item_complete(model_name, required_output_paths=[output_path]):
+                progress.update(
+                    task_id,
+                    description=f"Stage 06 resume: skipping completed model {model_name}",
+                )
+                progress.advance(task_id, advance=len(splits))
+                continue
+            resumer.clear_item(model_name, output_paths=[output_path])
             prediction_blocks: list[np.ndarray] = []
             quote_date_blocks: list[np.ndarray] = []
             target_date_blocks: list[np.ndarray] = []
@@ -194,12 +233,17 @@ def main(
                 predictions=np.vstack(prediction_blocks),
                 grid=grid,
             )
+            resumer.mark_complete(
+                model_name,
+                output_paths=[output_path],
+                metadata={
+                    "model_name": model_name,
+                    "n_splits": len(splits),
+                    "n_forecast_rows": int(np.concatenate(quote_date_blocks).shape[0]),
+                    "workflow_run_label": workflow_paths.run_label,
+                },
+            )
     forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
-    split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
-    tuning_manifest_paths = [
-        tuning_manifest_path(raw_config.manifests_dir, hpo_profile.profile_name, model_name)
-        for model_name in TUNABLE_MODEL_NAMES
-    ]
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
         repo_root=Path.cwd(),
@@ -235,6 +279,7 @@ def main(
             "hpo_profile_name": hpo_profile.profile_name,
             "training_profile_name": training_profile.profile_name,
             "workflow_run_label": workflow_paths.run_label,
+            "resume_context_hash": resumer.context_hash,
         },
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_experiment_name=mlflow_experiment_name,

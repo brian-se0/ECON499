@@ -25,7 +25,18 @@ class RawDataConfig(BaseModel):
     calendar_name: str = "XNYS"
     timezone: str = "America/New_York"
     decision_time: time = time(15, 45)
+    sample_start_date: date = date(2004, 1, 2)
+    sample_end_date: date = date(2021, 4, 9)
     am_settled_roots: tuple[str, ...] = ("SPX",)
+
+    @field_validator("sample_end_date")
+    @classmethod
+    def validate_sample_window_order(cls, value: date, info: Any) -> date:
+        start_date = info.data.get("sample_start_date")
+        if isinstance(start_date, date) and value < start_date:
+            message = "sample_end_date must be on or after sample_start_date."
+            raise ValueError(message)
+        return value
 
 
 class MarketCalendarConfig(BaseModel):
@@ -152,6 +163,17 @@ class ReportArtifactsConfig(BaseModel):
             ),
         )
     )
+
+    @field_validator("primary_loss_metric")
+    @classmethod
+    def validate_primary_loss_metric(cls, value: str) -> str:
+        if value.startswith("mean_") or value.startswith("std_"):
+            message = (
+                "primary_loss_metric must name the base daily loss metric, "
+                "not a summary column prefix."
+            )
+            raise ValueError(message)
+        return value
 
     @field_validator("interpolation_comparison_order")
     @classmethod

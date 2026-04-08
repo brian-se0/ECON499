@@ -16,8 +16,11 @@ from ivsurf.evaluation.alignment import (
     load_forecast_frame,
 )
 from ivsurf.evaluation.loss_panels import build_daily_loss_frame
+from ivsurf.io.atomic import write_bytes_atomic
+from ivsurf.io.parquet import write_parquet_frame
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
+from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.stats.diebold_mariano import diebold_mariano_test
 from ivsurf.stats.mcs import model_confidence_set
 from ivsurf.stats.spa import superior_predictive_ability_test
@@ -66,26 +69,71 @@ def main(
 
     output_dir = workflow_paths.stats_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    dm_results: list[dict[str, object]] = []
+    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    panel_path = output_dir / "forecast_realization_panel.parquet"
+    daily_loss_path = output_dir / "daily_loss_frame.parquet"
+    dm_results_path = output_dir / "dm_results.json"
+    spa_result_path = output_dir / "spa_result.json"
+    mcs_result_path = output_dir / "mcs_result.json"
+    loss_summary_path = output_dir / "loss_summary.parquet"
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "07_run_stats"),
+        stage_name="07_run_stats",
+        context_hash=build_resume_context_hash(
+            config_paths=[
+                raw_config_path,
+                metrics_config_path,
+                stats_config_path,
+                hpo_profile_config_path,
+                training_profile_config_path,
+            ],
+            input_artifact_paths=[
+                raw_config.manifests_dir / "gold_surface_summary.json",
+                *forecast_paths,
+            ],
+            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+        ),
+    )
+
     with create_progress() as progress:
         task_id = progress.add_task("Stage 07 statistical evaluation", total=None)
 
-        progress.update(task_id, description="Stage 07 loading realized surfaces and forecasts")
-        actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
-        forecast_frame = load_forecast_frame(workflow_paths.forecast_dir)
-        panel = build_forecast_realization_panel(
-            actual_surface_frame=actual_surface_frame,
-            forecast_frame=forecast_frame,
-        )
-        panel.write_parquet(output_dir / "forecast_realization_panel.parquet", compression="zstd")
+        if resumer.item_complete("forecast_realization_panel", required_output_paths=[panel_path]):
+            progress.update(task_id, description="Stage 07 resume: loading saved panel")
+            panel = pl.read_parquet(panel_path)
+        else:
+            resumer.clear_item("forecast_realization_panel", output_paths=[panel_path])
+            progress.update(task_id, description="Stage 07 loading realized surfaces and forecasts")
+            actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
+            forecast_frame = load_forecast_frame(workflow_paths.forecast_dir)
+            panel = build_forecast_realization_panel(
+                actual_surface_frame=actual_surface_frame,
+                forecast_frame=forecast_frame,
+            )
+            write_parquet_frame(panel, panel_path)
+            resumer.mark_complete(
+                "forecast_realization_panel",
+                output_paths=[panel_path],
+                metadata={"rows": panel.height},
+            )
 
-        progress.update(task_id, description="Stage 07 computing daily loss panel")
-        daily_loss_frame = build_daily_loss_frame(
-            panel=panel,
-            positive_floor=float(metrics_config["positive_floor"]),
-            full_grid_weighting=str(stats_config["full_grid_weighting"]),
-        )
-        daily_loss_frame.write_parquet(output_dir / "daily_loss_frame.parquet", compression="zstd")
+        if resumer.item_complete("daily_loss_frame", required_output_paths=[daily_loss_path]):
+            progress.update(task_id, description="Stage 07 resume: loading saved daily loss frame")
+            daily_loss_frame = pl.read_parquet(daily_loss_path)
+        else:
+            resumer.clear_item("daily_loss_frame", output_paths=[daily_loss_path])
+            progress.update(task_id, description="Stage 07 computing daily loss panel")
+            daily_loss_frame = build_daily_loss_frame(
+                panel=panel,
+                positive_floor=float(metrics_config["positive_floor"]),
+                full_grid_weighting=str(stats_config["full_grid_weighting"]),
+            )
+            write_parquet_frame(daily_loss_frame, daily_loss_path)
+            resumer.mark_complete(
+                "daily_loss_frame",
+                output_paths=[daily_loss_path],
+                metadata={"rows": daily_loss_frame.height},
+            )
 
         metric_column = str(stats_config["loss_metric"])
         loss_matrix, model_columns, _target_dates = _daily_loss_matrix(
@@ -106,78 +154,111 @@ def main(
             completed=2,
             description="Stage 07 running Diebold-Mariano tests",
         )
-        for model_name in model_columns:
-            if model_name == benchmark_model:
-                continue
-            model_index = model_columns.index(model_name)
-            result = diebold_mariano_test(
-                loss_a=benchmark_losses,
-                loss_b=loss_matrix[:, model_index],
-                model_a=benchmark_model,
-                model_b=model_name,
-                alternative=str(stats_config["dm_alternative"]),
-                max_lag=int(stats_config["dm_max_lag"]),
+        if not resumer.item_complete("dm_results", required_output_paths=[dm_results_path]):
+            resumer.clear_item("dm_results", output_paths=[dm_results_path])
+            dm_results: list[dict[str, object]] = []
+            for model_name in model_columns:
+                if model_name == benchmark_model:
+                    continue
+                model_index = model_columns.index(model_name)
+                result = diebold_mariano_test(
+                    loss_a=benchmark_losses,
+                    loss_b=loss_matrix[:, model_index],
+                    model_a=benchmark_model,
+                    model_b=model_name,
+                    alternative=str(stats_config["dm_alternative"]),
+                    max_lag=int(stats_config["dm_max_lag"]),
+                )
+                dm_results.append(asdict(result))
+                progress.advance(task_id)
+            write_bytes_atomic(
+                dm_results_path,
+                orjson.dumps(dm_results, option=orjson.OPT_INDENT_2),
             )
-            dm_results.append(asdict(result))
-            progress.advance(task_id)
-        (output_dir / "dm_results.json").write_bytes(
-            orjson.dumps(dm_results, option=orjson.OPT_INDENT_2)
-        )
+            resumer.mark_complete(
+                "dm_results",
+                output_paths=[dm_results_path],
+                metadata={"model_count": len(model_columns)},
+            )
+        else:
+            progress.advance(task_id, advance=dm_model_count)
 
         candidate_models = tuple(model for model in model_columns if model != benchmark_model)
         candidate_losses = np.column_stack(
             [loss_matrix[:, model_columns.index(model)] for model in candidate_models]
         )
         progress.update(task_id, description="Stage 07 running SPA bootstrap")
-        spa_result = superior_predictive_ability_test(
-            benchmark_losses=benchmark_losses,
-            candidate_losses=candidate_losses,
-            benchmark_model=benchmark_model,
-            candidate_models=candidate_models,
-            block_size=int(stats_config["spa_block_size"]),
-            bootstrap_reps=int(stats_config["spa_bootstrap_reps"]),
-            seed=int(stats_config["bootstrap_seed"]),
-        )
-        (output_dir / "spa_result.json").write_bytes(
-            orjson.dumps(asdict(spa_result), option=orjson.OPT_INDENT_2)
-        )
+        if not resumer.item_complete("spa_result", required_output_paths=[spa_result_path]):
+            resumer.clear_item("spa_result", output_paths=[spa_result_path])
+            spa_result = superior_predictive_ability_test(
+                benchmark_losses=benchmark_losses,
+                candidate_losses=candidate_losses,
+                benchmark_model=benchmark_model,
+                candidate_models=candidate_models,
+                block_size=int(stats_config["spa_block_size"]),
+                bootstrap_reps=int(stats_config["spa_bootstrap_reps"]),
+                seed=int(stats_config["bootstrap_seed"]),
+            )
+            write_bytes_atomic(
+                spa_result_path,
+                orjson.dumps(asdict(spa_result), option=orjson.OPT_INDENT_2),
+            )
+            resumer.mark_complete(
+                "spa_result",
+                output_paths=[spa_result_path],
+                metadata={"candidate_models": list(candidate_models)},
+            )
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 07 running MCS bootstrap")
-        mcs_result = model_confidence_set(
-            losses=loss_matrix,
-            model_names=model_columns,
-            alpha=float(stats_config["mcs_alpha"]),
-            block_size=int(stats_config["mcs_block_size"]),
-            bootstrap_reps=int(stats_config["mcs_bootstrap_reps"]),
-            seed=int(stats_config["bootstrap_seed"]),
-        )
-        (output_dir / "mcs_result.json").write_bytes(
-            orjson.dumps(asdict(mcs_result), option=orjson.OPT_INDENT_2)
-        )
+        if not resumer.item_complete("mcs_result", required_output_paths=[mcs_result_path]):
+            resumer.clear_item("mcs_result", output_paths=[mcs_result_path])
+            mcs_result = model_confidence_set(
+                losses=loss_matrix,
+                model_names=model_columns,
+                alpha=float(stats_config["mcs_alpha"]),
+                block_size=int(stats_config["mcs_block_size"]),
+                bootstrap_reps=int(stats_config["mcs_bootstrap_reps"]),
+                seed=int(stats_config["bootstrap_seed"]),
+            )
+            write_bytes_atomic(
+                mcs_result_path,
+                orjson.dumps(asdict(mcs_result), option=orjson.OPT_INDENT_2),
+            )
+            resumer.mark_complete(
+                "mcs_result",
+                output_paths=[mcs_result_path],
+                metadata={"model_names": list(model_columns)},
+            )
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 07 writing summary tables")
-        summary_frame = (
-            daily_loss_frame.group_by("model_name")
-            .agg(
-                pl.col(metric_column).mean().alias(f"mean_{metric_column}"),
-                pl.col(metric_column).std(ddof=1).alias(f"std_{metric_column}"),
-                pl.len().alias("n_target_dates"),
+        if not resumer.item_complete("loss_summary", required_output_paths=[loss_summary_path]):
+            resumer.clear_item("loss_summary", output_paths=[loss_summary_path])
+            summary_frame = (
+                daily_loss_frame.group_by("model_name")
+                .agg(
+                    pl.col(metric_column).mean().alias(f"mean_{metric_column}"),
+                    pl.col(metric_column).std(ddof=1).alias(f"std_{metric_column}"),
+                    pl.len().alias("n_target_dates"),
+                )
+                .sort(f"mean_{metric_column}")
             )
-            .sort(f"mean_{metric_column}")
-        )
-        summary_frame.write_parquet(output_dir / "loss_summary.parquet", compression="zstd")
+            write_parquet_frame(summary_frame, loss_summary_path)
+            resumer.mark_complete(
+                "loss_summary",
+                output_paths=[loss_summary_path],
+                metadata={"model_count": len(model_columns)},
+            )
         progress.advance(task_id)
 
-    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
     output_paths = [
-        output_dir / "forecast_realization_panel.parquet",
-        output_dir / "daily_loss_frame.parquet",
-        output_dir / "dm_results.json",
-        output_dir / "spa_result.json",
-        output_dir / "mcs_result.json",
-        output_dir / "loss_summary.parquet",
+        panel_path,
+        daily_loss_path,
+        dm_results_path,
+        spa_result_path,
+        mcs_result_path,
+        loss_summary_path,
     ]
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
@@ -205,6 +286,7 @@ def main(
             "loss_metric": metric_column,
             "benchmark_model": benchmark_model,
             "workflow_run_label": workflow_paths.run_label,
+            "resume_context_hash": resumer.context_hash,
         },
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_experiment_name=mlflow_experiment_name,
