@@ -11,7 +11,13 @@ import polars as pl
 
 @dataclass(frozen=True, slots=True)
 class DatasetMatrices:
-    """Dense matrices extracted from the daily feature dataset."""
+    """Dense matrices extracted from the daily feature dataset.
+
+    Every model trains against the completed `targets` matrix. Observed masks and
+    target-day vega weights define the official observed-cell evaluation view, while
+    `training_weights` carries the explicit neural supervision weights for the
+    completed surface.
+    """
 
     quote_dates: np.ndarray
     target_dates: np.ndarray
@@ -19,6 +25,7 @@ class DatasetMatrices:
     targets: np.ndarray
     observed_masks: np.ndarray
     vega_weights: np.ndarray
+    training_weights: np.ndarray
     feature_columns: tuple[str, ...]
     target_columns: tuple[str, ...]
 
@@ -66,9 +73,24 @@ def dataset_to_matrices(frame: pl.DataFrame) -> DatasetMatrices:
     target_columns = columns_by_prefix(frame, "target_total_variance_")
     observed_mask_columns = columns_by_prefix(frame, "target_observed_mask_")
     vega_weight_columns = columns_by_prefix(frame, "target_vega_weight_")
+    training_weight_columns = columns_by_prefix(frame, "target_training_weight_")
     if not target_columns:
         message = "Feature dataset must contain target_total_variance columns."
         raise ValueError(message)
+    expected_target_column_count = len(target_columns)
+    for column_group_name, column_group in (
+        ("target_observed_mask", observed_mask_columns),
+        ("target_vega_weight", vega_weight_columns),
+        ("target_training_weight", training_weight_columns),
+    ):
+        if len(column_group) != expected_target_column_count:
+            message = (
+                "Feature dataset target columns must be aligned one-to-one across "
+                f"completed targets and {column_group_name} columns. Expected "
+                f"{expected_target_column_count} {column_group_name} columns, "
+                f"found {len(column_group)}."
+            )
+            raise ValueError(message)
     return DatasetMatrices(
         quote_dates=frame["quote_date"].to_numpy(),
         target_dates=frame["target_date"].to_numpy(),
@@ -76,6 +98,7 @@ def dataset_to_matrices(frame: pl.DataFrame) -> DatasetMatrices:
         targets=frame.select(target_columns).to_numpy(),
         observed_masks=frame.select(observed_mask_columns).to_numpy(),
         vega_weights=frame.select(vega_weight_columns).to_numpy(),
+        training_weights=frame.select(training_weight_columns).to_numpy(),
         feature_columns=feature_columns,
         target_columns=target_columns,
     )
@@ -90,6 +113,7 @@ class SurfaceForecastModel:
         targets: np.ndarray,
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
+        training_weights: np.ndarray | None = None,
     ) -> SurfaceForecastModel:
         raise NotImplementedError
 

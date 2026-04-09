@@ -54,6 +54,7 @@ class NoChangeSurfaceModel(SurfaceForecastModel):
         targets: np.ndarray,
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
+        training_weights: np.ndarray | None = None,
     ) -> NoChangeSurfaceModel:
         self._column_count = targets.shape[1]
         return self

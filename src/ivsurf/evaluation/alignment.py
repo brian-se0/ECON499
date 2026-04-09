@@ -202,6 +202,8 @@ def build_forecast_realization_panel(
             (
                 pl.col("predicted_iv") - pl.col("origin_completed_iv")
             ).alias("predicted_iv_change"),
+            # Completed surfaces are the forecast target, while observed-mask x vega defines
+            # the official observed-cell evaluation slice used for headline metrics.
             pl.when(pl.col("actual_observed_mask"))
             .then(pl.col("actual_vega_sum"))
             .otherwise(0.0)

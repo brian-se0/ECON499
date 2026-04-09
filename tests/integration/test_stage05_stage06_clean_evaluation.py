@@ -53,6 +53,8 @@ def _feature_frame(row_count: int) -> pl.DataFrame:
                 "target_observed_mask_0001": 1.0,
                 "target_vega_weight_0000": 1.0,
                 "target_vega_weight_0001": 1.0,
+                "target_training_weight_0000": 1.0,
+                "target_training_weight_0001": 1.0,
             }
         )
     return pl.DataFrame(rows)
@@ -88,6 +90,8 @@ def _feature_frame_from_observed_dates(observed_dates: list[date]) -> pl.DataFra
                 "target_observed_mask_0001": 1.0,
                 "target_vega_weight_0000": 1.0,
                 "target_vega_weight_0001": 1.0,
+                "target_training_weight_0000": 1.0,
+                "target_training_weight_0001": 1.0,
             }
         )
     return pl.DataFrame(rows)

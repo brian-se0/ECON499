@@ -28,6 +28,7 @@ def fit_and_predict_neural(
         targets=matrices.targets[train_index],
         observed_masks=matrices.observed_masks[train_index],
         vega_weights=matrices.vega_weights[train_index],
+        training_weights=matrices.training_weights[train_index],
         validation_features=matrices.features[validation_index],
         validation_targets=matrices.targets[validation_index],
         validation_observed_masks=matrices.observed_masks[validation_index],

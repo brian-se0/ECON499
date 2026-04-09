@@ -20,6 +20,6 @@ def fit_and_predict(
         targets=matrices.targets[train_index],
         observed_masks=matrices.observed_masks[train_index],
         vega_weights=matrices.vega_weights[train_index],
+        training_weights=matrices.training_weights[train_index],
     )
     return model.predict(matrices.features[test_index])
-

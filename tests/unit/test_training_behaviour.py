@@ -18,6 +18,7 @@ def test_neural_training_uses_validation_early_stopping() -> None:
     targets = np.zeros((12, 2), dtype=np.float64)
     observed_masks = np.ones((12, 2), dtype=np.float64)
     vega_weights = np.ones((12, 2), dtype=np.float64)
+    training_weights = np.ones((12, 2), dtype=np.float64)
     config = NeuralModelConfig(
         hidden_width=8,
         depth=1,
@@ -44,6 +45,7 @@ def test_neural_training_uses_validation_early_stopping() -> None:
         targets=targets[:8],
         observed_masks=observed_masks[:8],
         vega_weights=vega_weights[:8],
+        training_weights=training_weights[:8],
         validation_features=features[8:],
         validation_targets=targets[8:],
         validation_observed_masks=observed_masks[8:],

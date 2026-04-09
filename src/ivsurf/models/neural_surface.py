@@ -68,7 +68,7 @@ def _clone_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
     }
 
 
-def _validation_score(
+def _observed_only_validation_score(
     model: NeuralSurfaceMLP,
     *,
     device: torch.device,
@@ -77,6 +77,8 @@ def _validation_score(
     observed_masks: np.ndarray,
     vega_weights: np.ndarray,
 ) -> float:
+    """Score validation batches on the official observed-cell evaluation view."""
+
     with torch.inference_mode():
         feature_tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
         predictions = model(feature_tensor).cpu().numpy().astype(np.float64, copy=False)
@@ -105,6 +107,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
         targets: np.ndarray,
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
+        training_weights: np.ndarray | None = None,
         *,
         validation_features: np.ndarray | None = None,
         validation_targets: np.ndarray | None = None,
@@ -117,8 +120,8 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
         if observed_masks is None:
             message = "NeuralSurfaceRegressor requires observed_masks."
             raise ValueError(message)
-        if vega_weights is None:
-            message = "NeuralSurfaceRegressor requires vega_weights."
+        if training_weights is None:
+            message = "NeuralSurfaceRegressor requires training_weights."
             raise ValueError(message)
         if training_profile is not None and (
             validation_features is None
@@ -154,7 +157,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             torch.as_tensor(features, dtype=torch.float32),
             torch.as_tensor(targets, dtype=torch.float32),
             torch.as_tensor(observed_masks, dtype=torch.float32),
-            torch.as_tensor(vega_weights, dtype=torch.float32),
+            torch.as_tensor(training_weights, dtype=torch.float32),
         )
         generator = torch.Generator().manual_seed(self.config.seed)
         loader = DataLoader(
@@ -183,19 +186,30 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
 
         model.train()
         for epoch in range(max_epochs):
-            for batch_features, batch_targets, batch_masks, batch_vega_weights in loader:
+            for (
+                batch_features,
+                batch_targets,
+                batch_masks,
+                batch_training_weights,
+            ) in loader:
                 batch_features = batch_features.to(device, non_blocking=use_cuda)
                 batch_targets = batch_targets.to(device, non_blocking=use_cuda)
                 batch_masks = batch_masks.to(device, non_blocking=use_cuda)
-                batch_vega_weights = batch_vega_weights.to(device, non_blocking=use_cuda)
+                batch_training_weights = batch_training_weights.to(
+                    device,
+                    non_blocking=use_cuda,
+                )
                 optimizer.zero_grad(set_to_none=True)
                 with torch.autocast(device_type=device.type, enabled=use_cuda):
                     predictions = model(batch_features)
+                    # Train on the completed target surface with explicit positive weights
+                    # for completed-only cells; observed-only scoring is reserved for
+                    # validation and downstream evaluation.
                     loss = weighted_surface_mse(
                         predictions=predictions,
                         targets=batch_targets,
                         observed_mask=batch_masks,
-                        vega_weights=batch_vega_weights,
+                        training_weights=batch_training_weights,
                         observed_loss_weight=self.config.observed_loss_weight,
                         imputed_loss_weight=self.config.imputed_loss_weight,
                     )
@@ -235,7 +249,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             ):
                 message = "Validation arrays unexpectedly became unavailable during training."
                 raise RuntimeError(message)
-            validation_score = _validation_score(
+            validation_score = _observed_only_validation_score(
                 model,
                 device=device,
                 features=validation_features,
@@ -270,7 +284,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             ):
                 message = "Validation arrays unexpectedly became unavailable after training."
                 raise RuntimeError(message)
-            best_validation_score = _validation_score(
+            best_validation_score = _observed_only_validation_score(
                 model,
                 device=device,
                 features=validation_features,

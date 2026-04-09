@@ -32,6 +32,7 @@ class ElasticNetSurfaceModel(SurfaceForecastModel):
         targets: np.ndarray,
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
+        training_weights: np.ndarray | None = None,
     ) -> ElasticNetSurfaceModel:
         self.pipeline.fit(
             features,

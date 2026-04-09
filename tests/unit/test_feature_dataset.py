@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import polars as pl
 import pytest
 
 from ivsurf.config import FeatureConfig, MarketCalendarConfig, SurfaceGridConfig
-from ivsurf.features.tabular_dataset import build_daily_feature_dataset
+from ivsurf.features.tabular_dataset import (
+    build_daily_feature_dataset,
+    build_target_training_weights,
+)
 from ivsurf.surfaces.grid import SurfaceGrid
 
 
@@ -139,3 +143,12 @@ def test_build_daily_feature_dataset_does_not_wrap_daily_change_to_the_last_surf
 
     assert feature_frame["quote_date"].to_list() == [date(2021, 1, 5)]
     assert feature_frame["target_date"].to_list() == [date(2021, 1, 6)]
+
+
+def test_build_target_training_weights_keeps_completed_only_cells_supervised() -> None:
+    training_weights = build_target_training_weights(
+        observed_mask=np.asarray([1.0, 0.0], dtype=np.float64),
+        vega_weights=np.asarray([2.0, 0.0], dtype=np.float64),
+    )
+
+    np.testing.assert_allclose(training_weights, np.asarray([2.0, 1.0], dtype=np.float64))

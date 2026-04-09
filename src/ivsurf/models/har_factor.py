@@ -29,6 +29,7 @@ class HarFactorSurfaceModel(SurfaceForecastModel):
         targets: np.ndarray,
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
+        training_weights: np.ndarray | None = None,
     ) -> HarFactorSurfaceModel:
         lag_1 = features[:, : self.target_dim]
         lag_5 = features[:, self.target_dim : (2 * self.target_dim)]

@@ -27,6 +27,7 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
         targets: np.ndarray,
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
+        training_weights: np.ndarray | None = None,
         *,
         validation_features: np.ndarray | None = None,
         validation_targets: np.ndarray | None = None,

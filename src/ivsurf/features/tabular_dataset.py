@@ -30,6 +30,43 @@ def _vector_columns(prefix: str, values: np.ndarray) -> dict[str, float]:
     return {f"{prefix}_{index:04d}": float(value) for index, value in enumerate(values)}
 
 
+def build_target_training_weights(
+    *,
+    observed_mask: np.ndarray,
+    vega_weights: np.ndarray,
+) -> np.ndarray:
+    """Build explicit neural training weights for the completed target surface.
+
+    Completed targets are the supervised object for every model. Observed cells retain
+    their positive target-day vega weighting, while completed-only cells receive a
+    unit training weight so `imputed_loss_weight` changes the neural objective.
+    """
+
+    observed_mask_array = np.asarray(observed_mask, dtype=np.float64)
+    vega_weight_array = np.asarray(vega_weights, dtype=np.float64)
+    if observed_mask_array.shape != vega_weight_array.shape:
+        message = (
+            "observed_mask and vega_weights must share the same shape when building "
+            "target training weights."
+        )
+        raise ValueError(message)
+    if not np.isfinite(vega_weight_array).all():
+        message = "target-day vega_weights must be finite when building training weights."
+        raise ValueError(message)
+
+    observed_cells = observed_mask_array > 0.5
+    observed_vega = np.maximum(vega_weight_array, 0.0)
+    invalid_observed_cells = observed_cells & (observed_vega <= 0.0)
+    if invalid_observed_cells.any():
+        message = (
+            "Observed target cells must retain strictly positive target-day vega when "
+            "building neural training weights."
+        )
+        raise ValueError(message)
+
+    return np.where(observed_cells, observed_vega, 1.0).astype(np.float64, copy=False)
+
+
 def _count_intervening_trading_sessions(
     calendar: MarketCalendar,
     *,
@@ -146,9 +183,14 @@ def build_daily_feature_dataset(
         target_surface = surface_arrays.completed_surfaces[position + 1]
         target_mask = surface_arrays.observed_masks[position + 1]
         target_vega = surface_arrays.vega_weights[position + 1]
+        target_training_weights = build_target_training_weights(
+            observed_mask=target_mask,
+            vega_weights=target_vega,
+        )
         row.update(_vector_columns("target_total_variance", target_surface))
         row.update(_vector_columns("target_observed_mask", target_mask))
         row.update(_vector_columns("target_vega_weight", target_vega))
+        row.update(_vector_columns("target_training_weight", target_training_weights))
         rows.append(row)
 
     return DailyDatasetBuildResult(feature_frame=pl.DataFrame(rows).sort("quote_date"))
