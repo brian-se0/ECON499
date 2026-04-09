@@ -33,6 +33,7 @@ Thumbs.db
 # Environment files
 .env
 .env.*
+AGENTS.md
 
 # ML and experiment outputs
 mlruns/
@@ -48,4 +49,3 @@ data/manifests/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
-
