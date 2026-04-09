@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import cast
 
+import numpy as np
 import orjson
 import polars as pl
 
@@ -55,6 +56,7 @@ def _surface_rows(
     observed[2][0] = float("nan")
     completed = complete_surface(
         observed_total_variance=pl.DataFrame(observed).to_numpy(),
+        observed_mask=np.isfinite(pl.DataFrame(observed).to_numpy()),
         maturity_coordinates=grid.maturity_years,
         moneyness_coordinates=pl.Series(grid.moneyness_points).to_numpy(),
         interpolation_order=("maturity", "moneyness"),

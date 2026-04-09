@@ -122,8 +122,10 @@ def main(
                 .to_numpy()
                 .reshape(grid.shape)
             )
+            observed_mask = observed["observed_mask"].to_numpy().reshape(grid.shape)
             completed = complete_surface(
                 observed_total_variance=observed_matrix,
+                observed_mask=observed_mask,
                 maturity_coordinates=maturity_years,
                 moneyness_coordinates=np.asarray(grid.moneyness_points, dtype=np.float64),
                 interpolation_order=surface_config.interpolation_order,

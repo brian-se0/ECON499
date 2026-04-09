@@ -23,6 +23,7 @@ from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.splits.manifests import WalkforwardSplit, load_splits
+from ivsurf.splits.walkforward import clean_evaluation_boundary
 from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.training.fit_lightgbm import fit_and_predict_lightgbm
 from ivsurf.training.fit_sklearn import fit_and_predict
@@ -61,6 +62,13 @@ def _make_pruner(hpo_profile: HpoProfileConfig) -> optuna.pruners.BasePruner:
             interval_steps=hpo_profile.pruner.interval_steps,
         )
     message = f"Unsupported Optuna pruner: {hpo_profile.pruner.name}"
+    raise ValueError(message)
+
+
+def _make_sampler(hpo_profile: HpoProfileConfig) -> optuna.samplers.BaseSampler:
+    if hpo_profile.sampler == "tpe":
+        return optuna.samplers.TPESampler(seed=hpo_profile.seed)
+    message = f"Unsupported Optuna sampler: {hpo_profile.sampler}"
     raise ValueError(message)
 
 
@@ -198,10 +206,14 @@ def main(
     if not tuning_splits:
         message = "No walk-forward splits available for tuning."
         raise ValueError(message)
+    evaluation_boundary = clean_evaluation_boundary(
+        splits,
+        tuning_splits_count=hpo_profile.tuning_splits_count,
+    )
 
     study = optuna.create_study(
         direction="minimize",
-        sampler=optuna.samplers.TPESampler(seed=hpo_profile.seed),
+        sampler=_make_sampler(hpo_profile),
         pruner=_make_pruner(hpo_profile),
     )
     total_progress_steps = hpo_profile.n_trials * len(tuning_splits)
@@ -247,6 +259,8 @@ def main(
         n_trials_completed=len(completed_trials),
         n_trials_pruned=len(pruned_trials),
         tuning_splits_count=hpo_profile.tuning_splits_count,
+        max_hpo_validation_date=evaluation_boundary.max_hpo_validation_date,
+        first_clean_test_split_id=evaluation_boundary.first_clean_test_split_id,
         seed=hpo_profile.seed,
         sampler=type(study.sampler).__name__,
         pruner=type(study.pruner).__name__,
@@ -262,6 +276,8 @@ def main(
             "n_trials_requested": hpo_profile.n_trials,
             "n_trials_completed": len(completed_trials),
             "n_trials_pruned": len(pruned_trials),
+            "max_hpo_validation_date": evaluation_boundary.max_hpo_validation_date.isoformat(),
+            "first_clean_test_split_id": evaluation_boundary.first_clean_test_split_id,
         },
     )
     run_manifest_path = write_run_manifest(
@@ -289,6 +305,8 @@ def main(
             "n_trials_requested": hpo_profile.n_trials,
             "n_trials_completed": len(completed_trials),
             "n_trials_pruned": len(pruned_trials),
+            "max_hpo_validation_date": evaluation_boundary.max_hpo_validation_date.isoformat(),
+            "first_clean_test_split_id": evaluation_boundary.first_clean_test_split_id,
             "resume_context_hash": resumer.context_hash,
         },
         mlflow_tracking_uri=mlflow_tracking_uri,

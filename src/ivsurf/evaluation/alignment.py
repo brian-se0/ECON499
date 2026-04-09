@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import polars as pl
@@ -99,6 +101,31 @@ def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
         message = "Expected exactly one active_underlying_price_1545 per quote_date in silver data."
         raise ValueError(message)
     return spot_frame.drop("spot_n_unique")
+
+
+def assert_forecast_origins_after_hpo_boundary(
+    forecast_frame: pl.DataFrame,
+    *,
+    max_hpo_validation_date: date,
+) -> None:
+    """Fail fast if forecast artifacts include HPO-contaminated origin dates."""
+
+    contaminated = forecast_frame.filter(pl.col("quote_date") <= pl.lit(max_hpo_validation_date))
+    if contaminated.is_empty():
+        return
+    earliest_quote_date = cast(date, contaminated["quote_date"].min())
+    latest_quote_date = cast(date, contaminated["quote_date"].max())
+    earliest_target_date = cast(date, contaminated["target_date"].min())
+    latest_target_date = cast(date, contaminated["target_date"].max())
+    message = (
+        "Forecast artifacts include quote_date values that were inside the HPO-used validation "
+        f"sample. Found {contaminated.height} contaminated rows with quote_date range "
+        f"[{earliest_quote_date.isoformat()}, {latest_quote_date.isoformat()}], "
+        f"target_date range "
+        f"[{earliest_target_date.isoformat()}, {latest_target_date.isoformat()}], and boundary "
+        f"{max_hpo_validation_date.isoformat()}."
+    )
+    raise ValueError(message)
 
 
 def build_forecast_realization_panel(

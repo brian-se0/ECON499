@@ -17,6 +17,7 @@ from ivsurf.config import (
     load_yaml_config,
 )
 from ivsurf.evaluation.alignment import (
+    assert_forecast_origins_after_hpo_boundary,
     build_forecast_realization_panel,
     load_actual_surface_frame,
     load_forecast_frame,
@@ -30,6 +31,11 @@ from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_
 from ivsurf.stats.diebold_mariano import diebold_mariano_test
 from ivsurf.stats.mcs import model_confidence_set
 from ivsurf.stats.spa import superior_predictive_ability_test
+from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES
+from ivsurf.training.tuning import (
+    load_required_tuning_results,
+    require_consistent_clean_evaluation_policy,
+)
 from ivsurf.workflow import resolve_workflow_run_paths
 
 app = typer.Typer(add_completion=False)
@@ -96,6 +102,10 @@ def main(
     output_dir = workflow_paths.stats_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    tuning_manifest_paths = [
+        raw_config.manifests_dir / "tuning" / hpo_profile.profile_name / f"{model_name}.json"
+        for model_name in TUNABLE_MODEL_NAMES
+    ]
     panel_path = output_dir / "forecast_realization_panel.parquet"
     daily_loss_path = output_dir / "daily_loss_frame.parquet"
     dm_results_path = output_dir / "dm_results.json"
@@ -115,11 +125,18 @@ def main(
             ],
             input_artifact_paths=[
                 raw_config.manifests_dir / "gold_surface_summary.json",
+                *tuning_manifest_paths,
                 *forecast_paths,
             ],
             extra_tokens={"workflow_run_label": workflow_paths.run_label},
         ),
     )
+    tuning_results = load_required_tuning_results(
+        raw_config.manifests_dir,
+        hpo_profile_name=hpo_profile.profile_name,
+        model_names=TUNABLE_MODEL_NAMES,
+    )
+    clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
 
     with create_progress() as progress:
         task_id = progress.add_task("Stage 07 statistical evaluation", total=None)
@@ -132,6 +149,10 @@ def main(
             progress.update(task_id, description="Stage 07 loading realized surfaces and forecasts")
             actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
             forecast_frame = load_forecast_frame(workflow_paths.forecast_dir)
+            assert_forecast_origins_after_hpo_boundary(
+                forecast_frame,
+                max_hpo_validation_date=clean_evaluation_policy.max_hpo_validation_date,
+            )
             panel = build_forecast_realization_panel(
                 actual_surface_frame=actual_surface_frame,
                 forecast_frame=forecast_frame,
@@ -254,6 +275,7 @@ def main(
                         candidate_losses=candidate_losses,
                         benchmark_model=benchmark_model,
                         candidate_models=candidate_models,
+                        alpha=stats_config.spa_alpha,
                         block_size=stats_config.spa_block_size,
                         bootstrap_reps=stats_config.spa_bootstrap_reps,
                         seed=stats_config.bootstrap_seed,
@@ -347,17 +369,21 @@ def main(
         ],
         input_artifact_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
+            *tuning_manifest_paths,
             *forecast_paths,
         ],
         output_artifact_paths=output_paths,
         data_manifest_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
+            *tuning_manifest_paths,
             *forecast_paths,
         ],
         random_seed=stats_config.bootstrap_seed,
         extra_metadata={
             "loss_metrics": list(stats_config.loss_metrics),
             "benchmark_model": benchmark_model,
+            "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
+            "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,
         },

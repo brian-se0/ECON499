@@ -48,6 +48,7 @@ def _fill_axis(values: np.ndarray, coordinates: np.ndarray) -> np.ndarray:
 
 def complete_surface(
     observed_total_variance: np.ndarray,
+    observed_mask: np.ndarray,
     maturity_coordinates: np.ndarray,
     moneyness_coordinates: np.ndarray,
     interpolation_order: tuple[str, ...],
@@ -57,7 +58,13 @@ def complete_surface(
     """Complete a surface by fixed-order sequential one-dimensional interpolation."""
 
     completed = observed_total_variance.astype(np.float64, copy=True)
-    observed_mask = np.isfinite(completed)
+    normalized_observed_mask = np.asarray(observed_mask, dtype=bool)
+    if normalized_observed_mask.shape != completed.shape:
+        message = (
+            "observed_mask must have the same shape as observed_total_variance, "
+            f"found {normalized_observed_mask.shape} != {completed.shape}."
+        )
+        raise ValueError(message)
 
     for _ in range(interpolation_cycles):
         for axis_name in interpolation_order:
@@ -85,4 +92,7 @@ def complete_surface(
         raise InterpolationError(message)
 
     completed = np.maximum(completed, total_variance_floor)
-    return CompletedSurface(completed_total_variance=completed, observed_mask=observed_mask)
+    return CompletedSurface(
+        completed_total_variance=completed,
+        observed_mask=normalized_observed_mask,
+    )

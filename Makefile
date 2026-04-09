@@ -149,7 +149,7 @@ hedging:
 report:
 	$(UV) run $(PYTHON) scripts/09_make_report_artifacts.py --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
 
-pipeline: check-runtime ingest silver surfaces features hpo-all train stats hedging report
+pipeline: check check-runtime ingest silver surfaces features hpo-all train stats hedging report
 
 pipeline-30:
 	$(MAKE) pipeline HPO_PROFILE=hpo_30_trials TRAIN_PROFILE=train_30_epochs

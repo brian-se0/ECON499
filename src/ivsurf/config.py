@@ -98,10 +98,21 @@ class FeatureConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    lag_windows: tuple[int, ...] = (1, 5, 22)
+    lag_windows: tuple[PositiveInt, ...] = (1, 5, 22)
     include_daily_change: bool = True
     include_mask: bool = True
     include_liquidity: bool = True
+
+    @field_validator("lag_windows")
+    @classmethod
+    def validate_lag_windows(cls, values: tuple[int, ...]) -> tuple[int, ...]:
+        if len(set(values)) != len(values):
+            message = "lag_windows must not contain duplicate entries."
+            raise ValueError(message)
+        if 1 not in values:
+            message = "lag_windows must include 1 to support the mandatory no-change benchmark."
+            raise ValueError(message)
+        return values
 
 
 class WalkforwardConfig(BaseModel):

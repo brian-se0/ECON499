@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import numpy as np
 import orjson
 import polars as pl
 
@@ -37,6 +38,7 @@ def _actual_surface_frame(grid: SurfaceGrid) -> pl.DataFrame:
     ]
     completed = complete_surface(
         observed_total_variance=pl.DataFrame(observed).to_numpy(),
+        observed_mask=np.isfinite(pl.DataFrame(observed).to_numpy()),
         maturity_coordinates=grid.maturity_years,
         moneyness_coordinates=pl.Series(grid.moneyness_points).to_numpy(),
         interpolation_order=("maturity", "moneyness"),

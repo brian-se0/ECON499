@@ -98,6 +98,7 @@ def test_end_to_end_smoke_pipeline() -> None:
         )
         completed = complete_surface(
             observed_total_variance=observed_matrix,
+            observed_mask=np.isfinite(observed_matrix),
             maturity_coordinates=grid.maturity_years,
             moneyness_coordinates=np.asarray(grid.moneyness_points, dtype=np.float64),
             interpolation_order=("maturity", "moneyness"),

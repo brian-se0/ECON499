@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -31,18 +32,26 @@ def columns_by_prefix(frame: pl.DataFrame, prefix: str) -> tuple[str, ...]:
 def ordered_feature_columns(frame: pl.DataFrame) -> tuple[str, ...]:
     """Return a stable feature order with lagged surfaces first."""
 
-    ordered_prefixes = (
-        "feature_surface_mean_01_",
-        "feature_surface_mean_05_",
-        "feature_surface_mean_22_",
-        "feature_surface_change_01_",
-        "feature_mask_mean_01_",
-        "feature_mask_mean_05_",
-        "feature_mask_mean_22_",
-    )
     ordered: list[str] = []
-    for prefix in ordered_prefixes:
-        ordered.extend(columns_by_prefix(frame, prefix))
+    grouped_prefixes: dict[str, set[str]] = {
+        "feature_surface_mean": set(),
+        "feature_surface_change": set(),
+        "feature_mask_mean": set(),
+    }
+    pattern = re.compile(r"^(feature_(?:surface_mean|surface_change|mask_mean))_(\d+)_")
+    for name in frame.columns:
+        match = pattern.match(name)
+        if match is None:
+            continue
+        prefix = f"{match.group(1)}_{match.group(2)}_"
+        grouped_prefixes[match.group(1)].add(prefix)
+
+    for group_name in ("feature_surface_mean", "feature_surface_change", "feature_mask_mean"):
+        for prefix in sorted(
+            grouped_prefixes[group_name],
+            key=lambda value: int(value.rsplit("_", maxsplit=2)[1]),
+        ):
+            ordered.extend(columns_by_prefix(frame, prefix))
     remaining = sorted(
         name for name in frame.columns if name.startswith("feature_") and name not in set(ordered)
     )

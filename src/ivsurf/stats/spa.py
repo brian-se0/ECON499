@@ -19,6 +19,7 @@ class SpaResult:
     p_value: float
     mean_differentials: tuple[float, ...]
     superior_models_by_mean: tuple[str, ...]
+    alpha: float
     block_size: int
     bootstrap_reps: int
 
@@ -28,6 +29,7 @@ def superior_predictive_ability_test(
     candidate_losses: np.ndarray,
     benchmark_model: str,
     candidate_models: tuple[str, ...],
+    alpha: float,
     block_size: int,
     bootstrap_reps: int,
     seed: int,
@@ -79,7 +81,7 @@ def superior_predictive_ability_test(
         p_value=p_value,
         mean_differentials=tuple(float(value) for value in means),
         superior_models_by_mean=superior_models,
+        alpha=alpha,
         block_size=block_size,
         bootstrap_reps=bootstrap_reps,
     )
-

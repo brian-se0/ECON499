@@ -21,13 +21,19 @@ from ivsurf.models.no_change import validate_no_change_feature_layout
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
-from ivsurf.splits.manifests import load_splits
+from ivsurf.splits.manifests import WalkforwardSplit, load_splits
+from ivsurf.splits.walkforward import clean_evaluation_splits
 from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.training.fit_lightgbm import fit_and_predict_lightgbm
 from ivsurf.training.fit_sklearn import fit_and_predict
 from ivsurf.training.fit_torch import fit_and_predict_neural
 from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES, make_model_from_params
-from ivsurf.training.tuning import TuningResult, load_required_tuning_results
+from ivsurf.training.tuning import (
+    CleanEvaluationPolicy,
+    TuningResult,
+    load_required_tuning_results,
+    require_consistent_clean_evaluation_policy,
+)
 from ivsurf.workflow import resolve_workflow_run_paths, tuning_manifest_path
 
 app = typer.Typer(add_completion=False)
@@ -54,6 +60,31 @@ def _merged_params(
     merged = dict(base_params)
     merged.update(tuning_result.best_params)
     return merged
+
+
+def _require_split_boundary_match(
+    policy: CleanEvaluationPolicy,
+    *,
+    split_manifest_splits: list[WalkforwardSplit],
+) -> list[WalkforwardSplit]:
+    boundary, clean_splits = clean_evaluation_splits(
+        split_manifest_splits,
+        tuning_splits_count=policy.tuning_splits_count,
+    )
+    if boundary.max_hpo_validation_date != policy.max_hpo_validation_date:
+        message = (
+            "Split manifest boundary does not match the tuning manifests: "
+            f"{boundary.max_hpo_validation_date.isoformat()} != "
+            f"{policy.max_hpo_validation_date.isoformat()}."
+        )
+        raise ValueError(message)
+    if boundary.first_clean_test_split_id != policy.first_clean_test_split_id:
+        message = (
+            "Split manifest clean evaluation start does not match the tuning manifests: "
+            f"{boundary.first_clean_test_split_id!r} != {policy.first_clean_test_split_id!r}."
+        )
+        raise ValueError(message)
+    return clean_splits
 
 
 @app.command()
@@ -136,6 +167,11 @@ def main(
         hpo_profile_name=hpo_profile.profile_name,
         model_names=TUNABLE_MODEL_NAMES,
     )
+    clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
+    clean_splits = _require_split_boundary_match(
+        clean_evaluation_policy,
+        split_manifest_splits=splits,
+    )
 
     base_param_map = {
         "ridge": {key: value for key, value in ridge_params.items() if key != "model_name"},
@@ -162,7 +198,7 @@ def main(
     }
 
     model_names = ("no_change", *TUNABLE_MODEL_NAMES)
-    total_steps = len(model_names) * len(splits)
+    total_steps = len(model_names) * len(clean_splits)
     with create_progress() as progress:
         task_id = progress.add_task("Stage 06 walk-forward forecasting", total=total_steps)
         for model_name in model_names:
@@ -172,13 +208,13 @@ def main(
                     task_id,
                     description=f"Stage 06 resume: skipping completed model {model_name}",
                 )
-                progress.advance(task_id, advance=len(splits))
+                progress.advance(task_id, advance=len(clean_splits))
                 continue
             resumer.clear_item(model_name, output_paths=[output_path])
             prediction_blocks: list[np.ndarray] = []
             quote_date_blocks: list[np.ndarray] = []
             target_date_blocks: list[np.ndarray] = []
-            for split in splits:
+            for split in clean_splits:
                 progress.update(
                     task_id,
                     description=f"Stage 06 walk-forward {model_name}: {split.split_id}",
@@ -243,9 +279,13 @@ def main(
                 output_paths=[output_path],
                 metadata={
                     "model_name": model_name,
-                    "n_splits": len(splits),
+                    "n_splits": len(clean_splits),
                     "n_forecast_rows": int(np.concatenate(quote_date_blocks).shape[0]),
                     "workflow_run_label": workflow_paths.run_label,
+                    "max_hpo_validation_date": (
+                        clean_evaluation_policy.max_hpo_validation_date.isoformat()
+                    ),
+                    "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
                 },
             )
     forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
@@ -280,9 +320,13 @@ def main(
         random_seed=neural_config.seed,
         extra_metadata={
             "model_names": list(model_names),
-            "n_splits": len(splits),
+            "n_splits": len(clean_splits),
             "hpo_profile_name": hpo_profile.profile_name,
             "training_profile_name": training_profile.profile_name,
+            "max_hpo_validation_date": (
+                clean_evaluation_policy.max_hpo_validation_date.isoformat()
+            ),
+            "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,
         },

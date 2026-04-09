@@ -54,6 +54,7 @@ def build_interpolation_sensitivity_frame(
         reference_surface = reshape_surface_column(group, grid, "completed_total_variance")
         alternate_surface = complete_surface(
             observed_total_variance=observed_surface,
+            observed_mask=observed_mask,
             maturity_coordinates=grid.maturity_years,
             moneyness_coordinates=np.asarray(grid.moneyness_points, dtype=np.float64),
             interpolation_order=alternate_order,

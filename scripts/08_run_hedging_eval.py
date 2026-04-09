@@ -14,13 +14,22 @@ from ivsurf.config import (
     TrainingProfileConfig,
     load_yaml_config,
 )
-from ivsurf.evaluation.alignment import load_actual_surface_frame, load_daily_spot_frame
+from ivsurf.evaluation.alignment import (
+    assert_forecast_origins_after_hpo_boundary,
+    load_actual_surface_frame,
+    load_daily_spot_frame,
+)
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
 from ivsurf.io.parquet import read_parquet_files, write_parquet_frame
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
+from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES
+from ivsurf.training.tuning import (
+    load_required_tuning_results,
+    require_consistent_clean_evaluation_policy,
+)
 from ivsurf.workflow import resolve_workflow_run_paths
 
 app = typer.Typer(add_completion=False)
@@ -54,6 +63,10 @@ def main(
     )
 
     forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    tuning_manifest_paths = [
+        raw_config.manifests_dir / "tuning" / hpo_profile.profile_name / f"{model_name}.json"
+        for model_name in TUNABLE_MODEL_NAMES
+    ]
     output_dir = workflow_paths.hedging_dir
     by_model_dir = output_dir / "by_model"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -71,11 +84,18 @@ def main(
             input_artifact_paths=[
                 raw_config.manifests_dir / "gold_surface_summary.json",
                 raw_config.manifests_dir / "silver_build_summary.json",
+                *tuning_manifest_paths,
                 *forecast_paths,
             ],
             extra_tokens={"workflow_run_label": workflow_paths.run_label},
         ),
     )
+    tuning_results = load_required_tuning_results(
+        raw_config.manifests_dir,
+        hpo_profile_name=hpo_profile.profile_name,
+        model_names=TUNABLE_MODEL_NAMES,
+    )
+    clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
 
     actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
     spot_frame = load_daily_spot_frame(raw_config.silver_dir)
@@ -90,6 +110,10 @@ def main(
         for forecast_path in forecast_paths:
             forecast_frame = pl.read_parquet(forecast_path).sort(
                 ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
+            )
+            assert_forecast_origins_after_hpo_boundary(
+                forecast_frame,
+                max_hpo_validation_date=clean_evaluation_policy.max_hpo_validation_date,
             )
             if forecast_frame.is_empty():
                 message = f"Forecast artifact {forecast_path} is empty."
@@ -188,18 +212,22 @@ def main(
         input_artifact_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
             raw_config.manifests_dir / "silver_build_summary.json",
+            *tuning_manifest_paths,
             *forecast_paths,
         ],
         output_artifact_paths=[hedging_results_path, hedging_summary_path, *model_output_paths],
         data_manifest_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
             raw_config.manifests_dir / "silver_build_summary.json",
+            *tuning_manifest_paths,
             *forecast_paths,
         ],
         extra_metadata={
             "benchmark_model": "no_change",
             "n_results": results_frame.height,
             "hedge_spot_assumption": "no_change",
+            "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
+            "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,
         },

@@ -8,6 +8,9 @@ from types import ModuleType
 import orjson
 import polars as pl
 import pytest
+from pytest import MonkeyPatch
+
+from ivsurf.training.tuning import TuningResult, write_tuning_result
 
 
 def _load_script_module(script_path: Path, module_name: str) -> ModuleType:
@@ -50,6 +53,7 @@ def _surface_rows(quote_date: date, sigma: float) -> list[dict[str, object]]:
 
 def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
     tmp_path: Path,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     gold_dir = tmp_path / "data" / "gold"
@@ -60,6 +64,8 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
     workflow_label = "test_hpo__test_train"
     forecast_dir = gold_dir / "forecasts" / workflow_label
     forecast_dir.mkdir(parents=True)
+    tuning_dir = manifests_dir / "tuning" / "test_hpo"
+    tuning_dir.mkdir(parents=True)
 
     gold_summary = []
     for quote_date, sigma in ((date(2021, 1, 4), 0.20), (date(2021, 1, 5), 0.22)):
@@ -159,11 +165,31 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
             "lightgbm_first_metric_only: true\n"
         ),
     )
+    write_tuning_result(
+        TuningResult(
+            model_name="ridge",
+            hpo_profile_name="test_hpo",
+            training_profile_name="test_train",
+            best_value=0.1,
+            best_params={"alpha": 1.0},
+            n_trials_requested=1,
+            n_trials_completed=1,
+            n_trials_pruned=0,
+            tuning_splits_count=1,
+            max_hpo_validation_date=date(2021, 1, 3),
+            first_clean_test_split_id="split_0000",
+            seed=7,
+            sampler="TPESampler",
+            pruner="MedianPruner",
+        ),
+        tuning_dir / "ridge.json",
+    )
 
     script_module = _load_script_module(
         repo_root / "scripts" / "07_run_stats.py",
         "stage07_negative_prediction_script",
     )
+    monkeypatch.setattr(script_module, "TUNABLE_MODEL_NAMES", ("ridge",))
     with pytest.raises(ValueError, match="negative total variance"):
         script_module.main(
             raw_config_path=raw_config_path,

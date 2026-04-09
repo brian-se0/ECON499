@@ -95,11 +95,11 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
 ) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     workflow_label = "hpo_30_trials__train_30_epochs"
-    quote_dates = _business_dates(date(2021, 1, 4), count=30)
+    quote_dates = _business_dates(date(2021, 1, 4), count=31)
     raw_dir = tmp_path / "raw"
     manifests_dir = tmp_path / "data" / "manifests"
 
-    for quote_date, spot in zip(quote_dates, range(100, 130), strict=True):
+    for quote_date, spot in zip(quote_dates, range(100, 131), strict=True):
         _write_raw_zip(
             raw_dir / f"UnderlyingOptionsEODCalcs_{quote_date.strftime('%Y%m%d')}.zip",
             _raw_rows(quote_date, float(spot)),
@@ -224,7 +224,7 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
         (
             'profile_name: "hpo_30_trials"\n'
             "n_trials: 1\n"
-            "tuning_splits_count: 1\n"
+            "tuning_splits_count: 3\n"
             "seed: 7\n"
         ),
     )

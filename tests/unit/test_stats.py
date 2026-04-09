@@ -4,8 +4,12 @@ from datetime import date
 
 import numpy as np
 import polars as pl
+import pytest
 
-from ivsurf.evaluation.alignment import build_forecast_realization_panel
+from ivsurf.evaluation.alignment import (
+    assert_forecast_origins_after_hpo_boundary,
+    build_forecast_realization_panel,
+)
 from ivsurf.evaluation.loss_panels import build_daily_loss_frame
 from ivsurf.stats.diebold_mariano import diebold_mariano_test
 from ivsurf.stats.mcs import model_confidence_set
@@ -110,12 +114,14 @@ def test_spa_and_mcs_favor_better_models() -> None:
         candidate_losses=candidates,
         benchmark_model="benchmark",
         candidate_models=("good", "okay", "bad"),
+        alpha=0.10,
         block_size=2,
         bootstrap_reps=200,
         seed=7,
     )
     assert spa.observed_statistic > 0.0
     assert 0.0 <= spa.p_value <= 1.0
+    assert spa.alpha == 0.10
     assert "good" in spa.superior_models_by_mean
 
     losses = np.column_stack([benchmark, candidates])
@@ -128,3 +134,24 @@ def test_spa_and_mcs_favor_better_models() -> None:
         seed=7,
     )
     assert "bad" not in mcs.superior_models
+
+
+def test_forecast_origin_guard_rejects_hpo_contaminated_rows() -> None:
+    forecast_frame = pl.DataFrame(
+        {
+            "model_name": ["ridge", "ridge"],
+            "quote_date": [date(2021, 1, 4), date(2021, 1, 5)],
+            "target_date": [date(2021, 1, 5), date(2021, 1, 6)],
+            "maturity_index": [0, 0],
+            "maturity_days": [30, 30],
+            "moneyness_index": [0, 0],
+            "moneyness_point": [0.0, 0.0],
+            "predicted_total_variance": [0.01, 0.02],
+        }
+    )
+
+    with pytest.raises(ValueError, match="quote_date values"):
+        assert_forecast_origins_after_hpo_boundary(
+            forecast_frame,
+            max_hpo_validation_date=date(2021, 1, 4),
+        )

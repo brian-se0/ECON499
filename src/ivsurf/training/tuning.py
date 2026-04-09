@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import orjson
@@ -28,9 +30,20 @@ class TuningResult(BaseModel):
     n_trials_completed: int = Field(ge=0)
     n_trials_pruned: int = Field(ge=0)
     tuning_splits_count: PositiveInt
+    max_hpo_validation_date: date
+    first_clean_test_split_id: str
     seed: int
     sampler: str
     pruner: str
+
+
+@dataclass(frozen=True, slots=True)
+class CleanEvaluationPolicy:
+    """Shared clean-evaluation policy loaded from tuning manifests."""
+
+    tuning_splits_count: int
+    max_hpo_validation_date: date
+    first_clean_test_split_id: str
 
 
 def write_tuning_result(result: TuningResult, output_path: Path) -> None:
@@ -72,3 +85,44 @@ def load_required_tuning_results(
         )
         raise FileNotFoundError(message)
     return loaded
+
+
+def require_consistent_clean_evaluation_policy(
+    tuning_results: Iterable[TuningResult],
+) -> CleanEvaluationPolicy:
+    """Fail fast unless all tuning manifests agree on the evaluation boundary."""
+
+    results = tuple(tuning_results)
+    if not results:
+        message = "At least one tuning result is required to define the evaluation boundary."
+        raise ValueError(message)
+
+    tuning_counts = {result.tuning_splits_count for result in results}
+    if len(tuning_counts) != 1:
+        message = (
+            "Tuning manifests disagree on tuning_splits_count: "
+            f"{sorted(tuning_counts)}."
+        )
+        raise ValueError(message)
+
+    max_validation_dates = {result.max_hpo_validation_date for result in results}
+    if len(max_validation_dates) != 1:
+        message = (
+            "Tuning manifests disagree on max_hpo_validation_date: "
+            f"{sorted(value.isoformat() for value in max_validation_dates)}."
+        )
+        raise ValueError(message)
+
+    first_clean_split_ids = {result.first_clean_test_split_id for result in results}
+    if len(first_clean_split_ids) != 1:
+        message = (
+            "Tuning manifests disagree on first_clean_test_split_id: "
+            f"{sorted(first_clean_split_ids)}."
+        )
+        raise ValueError(message)
+
+    return CleanEvaluationPolicy(
+        tuning_splits_count=results[0].tuning_splits_count,
+        max_hpo_validation_date=results[0].max_hpo_validation_date,
+        first_clean_test_split_id=results[0].first_clean_test_split_id,
+    )
