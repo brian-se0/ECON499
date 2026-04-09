@@ -7,6 +7,7 @@ from types import ModuleType
 
 import orjson
 import polars as pl
+import pytest
 
 
 def _load_script_module(script_path: Path, module_name: str) -> ModuleType:
@@ -47,7 +48,7 @@ def _surface_rows(quote_date: date, sigma: float) -> list[dict[str, object]]:
     return rows
 
 
-def test_stage07_floors_negative_forecast_total_variance_before_iv_conversion(
+def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[2]
@@ -163,18 +164,11 @@ def test_stage07_floors_negative_forecast_total_variance_before_iv_conversion(
         repo_root / "scripts" / "07_run_stats.py",
         "stage07_negative_prediction_script",
     )
-    script_module.main(
-        raw_config_path=raw_config_path,
-        metrics_config_path=metrics_config_path,
-        stats_config_path=stats_config_path,
-        hpo_profile_config_path=hpo_profile_path,
-        training_profile_config_path=training_profile_path,
-    )
-
-    stats_dir = manifests_dir / "stats" / workflow_label
-    panel = pl.read_parquet(stats_dir / "forecast_realization_panel.parquet")
-    daily_loss = pl.read_parquet(stats_dir / "daily_loss_frame.parquet")
-
-    assert panel["predicted_iv"].is_finite().all()
-    assert panel["predicted_iv_change"].is_finite().all()
-    assert daily_loss["observed_mse_total_variance"].is_finite().all()
+    with pytest.raises(ValueError, match="negative total variance"):
+        script_module.main(
+            raw_config_path=raw_config_path,
+            metrics_config_path=metrics_config_path,
+            stats_config_path=stats_config_path,
+            hpo_profile_config_path=hpo_profile_path,
+            training_profile_config_path=training_profile_path,
+        )

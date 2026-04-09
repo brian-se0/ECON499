@@ -5,9 +5,12 @@ gold_dir: "data/gold"
 manifests_dir: "data/manifests"
 raw_file_glob: "UnderlyingOptionsEODCalcs_*.zip"
 target_symbol: "^SPX"
+# The thesis universe is SPX-underlying options, which includes SPX and SPXW roots
+# whenever underlying_symbol remains ^SPX.
 calendar_name: "XNYS"
 timezone: "America/New_York"
 decision_time: "15:45:00"
+decision_snapshot_minutes_before_close: 15
 sample_start_date: "2004-01-02"
 sample_end_date: "2021-04-09"
 am_settled_roots:

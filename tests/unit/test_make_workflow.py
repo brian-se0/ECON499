@@ -46,6 +46,7 @@ def test_makefile_exposes_official_targets() -> None:
         "pipeline-30:",
         "pipeline-100:",
         "check:",
+        "check-runtime:",
     ):
         assert target in makefile
 
@@ -55,6 +56,7 @@ def test_readme_documents_make_as_official_interface() -> None:
 
     assert "`make` is the official interface" in readme
     assert "make pipeline" in readme
+    assert "make check-runtime" in readme
     assert "make hpo-30" in readme
     assert "make train-100" in readme
     assert "make clean" in readme

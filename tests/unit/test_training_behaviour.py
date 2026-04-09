@@ -54,7 +54,9 @@ def test_neural_training_uses_validation_early_stopping() -> None:
     assert model.best_epoch == 1
     assert model.epochs_completed == 2
     assert model.best_validation_score is not None
-    assert model.predict(features[8:]).shape == (4, 2)
+    predictions = model.predict(features[8:])
+    assert predictions.shape == (4, 2)
+    assert (predictions > 0.0).all()
 
 
 def test_lightgbm_training_uses_validation_early_stopping() -> None:
@@ -63,12 +65,12 @@ def test_lightgbm_training_uses_validation_early_stopping() -> None:
         dtype=np.float64,
     )
     train_targets = np.asarray(
-        [[0.0, 0.1], [0.2, 0.3], [0.4, 0.5], [0.6, 0.7], [0.8, 0.9], [1.0, 1.1]],
+        [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0], [1.1, 1.2]],
         dtype=np.float64,
     )
     validation_features = np.asarray([[1.5], [2.5], [3.5]], dtype=np.float64)
     validation_targets = np.asarray(
-        [[0.3, 0.4], [0.5, 0.6], [0.7, 0.8]],
+        [[0.4, 0.5], [0.6, 0.7], [0.8, 0.9]],
         dtype=np.float64,
     )
     training_profile = TrainingProfileConfig(
@@ -102,7 +104,9 @@ def test_lightgbm_training_uses_validation_early_stopping() -> None:
 
     assert model.best_iterations
     assert all(best_iteration < 50 for best_iteration in model.best_iterations)
-    assert model.predict(validation_features).shape == (3, 2)
+    predictions = model.predict(validation_features)
+    assert predictions.shape == (3, 2)
+    assert (predictions > 0.0).all()
 
 
 def test_lightgbm_tuning_respects_configured_device_type() -> None:

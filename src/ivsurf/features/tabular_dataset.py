@@ -42,6 +42,7 @@ def build_daily_feature_dataset(
         calendar_name=calendar_config.calendar_name,
         timezone=calendar_config.timezone,
         decision_time=calendar_config.decision_time,
+        decision_snapshot_minutes_before_close=calendar_config.decision_snapshot_minutes_before_close,
         am_settled_roots=calendar_config.am_settled_roots,
     )
 

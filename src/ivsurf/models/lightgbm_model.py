@@ -9,6 +9,7 @@ from lightgbm import LGBMRegressor, early_stopping, log_evaluation
 
 from ivsurf.config import TrainingProfileConfig
 from ivsurf.models.base import SurfaceForecastModel
+from ivsurf.models.positive_target import LogPositiveTargetAdapter
 
 
 class LightGBMSurfaceModel(SurfaceForecastModel):
@@ -18,6 +19,7 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
         self.params = dict(params)
         self.estimators: list[LGBMRegressor] = []
         self.best_iterations: tuple[int, ...] = ()
+        self.target_adapter = LogPositiveTargetAdapter("LightGBMSurfaceModel")
 
     def fit(
         self,
@@ -32,17 +34,29 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
     ) -> LightGBMSurfaceModel:
         estimators: list[LGBMRegressor] = []
         best_iterations: list[int] = []
+        transformed_targets = self.target_adapter.transform_targets(
+            targets,
+            array_name="training targets",
+        )
+        transformed_validation_targets = (
+            None
+            if validation_targets is None
+            else self.target_adapter.transform_targets(
+                validation_targets,
+                array_name="validation targets",
+            )
+        )
         for target_index in range(targets.shape[1]):
             estimator = LGBMRegressor(**self.params)
             fit_kwargs: dict[str, Any] = {}
             if (
                 validation_features is not None
-                and validation_targets is not None
+                and transformed_validation_targets is not None
                 and training_profile is not None
             ):
                 fit_kwargs["callbacks"] = [log_evaluation(period=0)]
                 fit_kwargs["eval_set"] = [
-                    (validation_features, validation_targets[:, target_index]),
+                    (validation_features, transformed_validation_targets[:, target_index]),
                 ]
                 fit_kwargs["eval_metric"] = "l2"
                 fit_kwargs["callbacks"].append(
@@ -53,7 +67,7 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
                         verbose=False,
                     )
                 )
-            estimator.fit(features, targets[:, target_index], **fit_kwargs)
+            estimator.fit(features, transformed_targets[:, target_index], **fit_kwargs)
             estimators.append(estimator)
             best_iteration = estimator.best_iteration_
             if best_iteration is None:
@@ -84,4 +98,4 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
                 )
             ]
         )
-        return np.asarray(predictions, dtype=np.float64)
+        return self.target_adapter.inverse_predictions(predictions)

@@ -7,8 +7,8 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from ivsurf.evaluation.metrics import total_variance_to_iv
-from ivsurf.io.parquet import read_parquet_files, scan_parquet_files
+from ivsurf.evaluation.metrics import total_variance_to_iv, validate_total_variance_array
+from ivsurf.io.parquet import scan_parquet_files
 
 
 def _require_files(paths: list[Path], description: str) -> None:
@@ -32,24 +32,39 @@ def _require_finite_float_columns(frame: pl.DataFrame, *, columns: tuple[str, ..
             raise ValueError(message)
 
 
+def _require_non_negative_float_columns(frame: pl.DataFrame, *, columns: tuple[str, ...]) -> None:
+    for column in columns:
+        values = frame[column].to_numpy().astype(np.float64, copy=False)
+        validate_total_variance_array(
+            values,
+            context=f"Aligned evaluation panel column {column}",
+            allow_zero=True,
+        )
+
+
 def load_actual_surface_frame(gold_dir: Path) -> pl.DataFrame:
     """Load persisted daily surface artifacts."""
 
     gold_files = sorted(gold_dir.glob("year=*/*.parquet"))
     _require_files(gold_files, "gold surface")
-    return read_parquet_files(gold_files).select(
-        "quote_date",
-        "maturity_index",
-        "maturity_days",
-        "moneyness_index",
-        "moneyness_point",
-        "observed_total_variance",
-        "observed_iv",
-        "completed_total_variance",
-        "completed_iv",
-        "observed_mask",
-        "vega_sum",
-    ).sort(["quote_date", "maturity_index", "moneyness_index"])
+    return (
+        scan_parquet_files(gold_files)
+        .select(
+            "quote_date",
+            "maturity_index",
+            "maturity_days",
+            "moneyness_index",
+            "moneyness_point",
+            "observed_total_variance",
+            "observed_iv",
+            "completed_total_variance",
+            "completed_iv",
+            "observed_mask",
+            "vega_sum",
+        )
+        .collect(engine="streaming")
+        .sort(["quote_date", "maturity_index", "moneyness_index"])
+    )
 
 
 def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
@@ -57,13 +72,15 @@ def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
 
     forecast_files = sorted(forecast_dir.glob("*.parquet"))
     _require_files(forecast_files, "forecast")
-    return read_parquet_files(forecast_files).sort(
-        ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
+    return (
+        scan_parquet_files(forecast_files)
+        .collect(engine="streaming")
+        .sort(["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"])
     )
 
 
 def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
-    """Load one explicit 15:45 spot per date from the silver option panel."""
+    """Load one explicit decision-snapshot spot per date from the silver option panel."""
 
     silver_files = sorted(silver_dir.glob("year=*/*.parquet"))
     _require_files(silver_files, "silver")
@@ -141,6 +158,7 @@ def build_forecast_realization_panel(
         ),
     )
     _require_finite_float_columns(joined_panel, columns=("predicted_total_variance",))
+    _require_non_negative_float_columns(joined_panel, columns=("predicted_total_variance",))
 
     panel = (
         panel_with_completed_iv(
@@ -193,7 +211,11 @@ def panel_with_completed_iv(
     maturity_years = (
         frame[maturity_days_column].to_numpy().astype(np.float64) / 365.0
     ).reshape(-1, 1)
-    total_variance = frame[total_variance_column].to_numpy().astype(np.float64).reshape(-1, 1)
+    total_variance = validate_total_variance_array(
+        frame[total_variance_column].to_numpy().astype(np.float64),
+        context=f"Aligned panel column {total_variance_column}",
+        allow_zero=True,
+    ).reshape(-1, 1)
     iv = total_variance_to_iv(
         total_variance=total_variance,
         maturity_years=maturity_years,

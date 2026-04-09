@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from ivsurf.evaluation.metrics import total_variance_to_iv, weighted_mse
 
@@ -16,8 +17,20 @@ def test_weighted_mse_matches_manual_weighted_average() -> None:
     assert result == expected
 
 
-def test_total_variance_to_iv_applies_explicit_floor_before_square_root() -> None:
+def test_total_variance_to_iv_rejects_negative_inputs() -> None:
     total_variance = np.asarray([[-1.0e-4], [4.0e-4]], dtype=np.float64)
+    maturity_years = np.asarray([[30.0 / 365.0], [30.0 / 365.0]], dtype=np.float64)
+
+    with pytest.raises(ValueError, match="negative total variance"):
+        total_variance_to_iv(
+            total_variance=total_variance,
+            maturity_years=maturity_years,
+            total_variance_floor=1.0e-8,
+        )
+
+
+def test_total_variance_to_iv_floors_small_non_negative_inputs_for_metric_stability() -> None:
+    total_variance = np.asarray([[0.0], [4.0e-4]], dtype=np.float64)
     maturity_years = np.asarray([[30.0 / 365.0], [30.0 / 365.0]], dtype=np.float64)
 
     result = total_variance_to_iv(

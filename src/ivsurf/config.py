@@ -25,6 +25,7 @@ class RawDataConfig(BaseModel):
     calendar_name: str = "XNYS"
     timezone: str = "America/New_York"
     decision_time: time = time(15, 45)
+    decision_snapshot_minutes_before_close: int = Field(default=15, ge=0)
     sample_start_date: date = date(2004, 1, 2)
     sample_end_date: date = date(2021, 4, 9)
     am_settled_roots: tuple[str, ...] = ("SPX",)
@@ -47,6 +48,7 @@ class MarketCalendarConfig(BaseModel):
     calendar_name: str = "XNYS"
     timezone: str = "America/New_York"
     decision_time: time = time(15, 45)
+    decision_snapshot_minutes_before_close: int = Field(default=15, ge=0)
     am_settled_roots: tuple[str, ...] = ("SPX",)
 
 
@@ -336,7 +338,7 @@ class NeuralModelConfig(BaseModel):
     calendar_penalty_weight: float = Field(default=0.05, ge=0.0)
     convexity_penalty_weight: float = Field(default=0.05, ge=0.0)
     roughness_penalty_weight: float = Field(default=0.005, ge=0.0)
-    device: str = "cpu"
+    device: str = "cuda"
 
 
 def calendar_config_from_raw(raw_config: RawDataConfig) -> MarketCalendarConfig:
@@ -346,6 +348,7 @@ def calendar_config_from_raw(raw_config: RawDataConfig) -> MarketCalendarConfig:
         calendar_name=raw_config.calendar_name,
         timezone=raw_config.timezone,
         decision_time=raw_config.decision_time,
+        decision_snapshot_minutes_before_close=raw_config.decision_snapshot_minutes_before_close,
         am_settled_roots=raw_config.am_settled_roots,
     )
 

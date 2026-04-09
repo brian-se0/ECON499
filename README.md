@@ -6,7 +6,7 @@ Research-grade, leak-free SPX implied-volatility-surface forecasting infrastruct
 
 - Raw daily zip ingestion from `D:\Options Data`
 - Input contract is the calcs-included Cboe Option EOD Summary daily zip format
-- Explicit schema validation and early SPX filtering
+- Explicit schema validation and early SPX-underlying filtering
 - Leak-free 15:45 option cleaning and derived-field construction
 - Daily observed and completed total-variance surfaces
 - Daily feature/target dataset with next-decision-session alignment
@@ -17,6 +17,8 @@ Research-grade, leak-free SPX implied-volatility-surface forecasting infrastruct
 
 The official thesis sample window is `2004-01-02` through `2021-04-09`. This window is enforced in executable config and is not inferred from whatever files happen to be present in `data/`.
 
+The thesis universe is the SPX underlying universe defined by `underlying_symbol == "^SPX"`. That includes both `SPX` and `SPXW` roots whenever they are written on the SPX underlying.
+
 ## Official Workflow
 
 `make` is the official interface for running this repository.
@@ -25,6 +27,7 @@ The official thesis sample window is `2004-01-02` through `2021-04-09`. This win
 - The `scripts/*.py` files are internal stage entrypoints invoked by the `Makefile`.
 - Direct script invocation is not the documented workflow for this project.
 - HPO is a required stage before walk-forward training. The official `pipeline` targets always run stage `05` before stage `06`.
+- The official `pipeline` target now runs `make check-runtime` first so the Windows/GPU/CUDA contract fails fast before any raw-data work starts.
 
 ## Requirements
 
@@ -72,6 +75,7 @@ The official workflow is now locked to explicit serialized profiles:
 The standard high-level commands are:
 
 ```powershell
+make check-runtime
 make hpo-30
 make hpo-100
 make train-30
@@ -94,6 +98,12 @@ Run the full pipeline with the lighter official profile:
 
 ```powershell
 make pipeline
+```
+
+Validate the official runtime before the first raw-data run:
+
+```powershell
+make check-runtime
 ```
 
 Or explicitly choose the pipeline profile:
@@ -218,11 +228,11 @@ Item granularity is stage-specific:
 
 ## Timing Conventions
 
-The pipeline treats `15:45 ET` as the decision timestamp and rejects sessions that close before then. Time to maturity is computed to the contract's last tradable session close using explicit root-based settlement conventions:
+The pipeline treats the vendor `"1545"` columns as the decision snapshot on every trading session. On regular sessions the effective decision time is `15:45 ET`. On early-close sessions the effective decision time is the vendor snapshot taken `15` minutes before the scheduled close, which is `12:45 ET` on the documented `13:00 ET` early-close schedule. Time to maturity is computed from that effective snapshot time to the contract's last tradable session close using explicit root-based settlement conventions:
 
 - `SPX` is treated as AM-settled by default.
 - `SPXW` and other roots are treated as PM-settled unless explicitly configured otherwise.
 
-Feature/target pairs are aligned to the next session that actually contains the configured decision time. This means early-close sessions are not silently treated as valid `t+1` targets for the 15:45 forecasting problem.
+Feature/target pairs are aligned to the next observed trading session. This means pre-early-close features target the early-close session itself rather than skipping to the next regular close.
 
 This is serialized in configuration so the contract-timing assumption is visible, versioned, and testable.

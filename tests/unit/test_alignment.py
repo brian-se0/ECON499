@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
-import numpy as np
 import polars as pl
+import pytest
 
 from ivsurf.evaluation.alignment import build_forecast_realization_panel
 
@@ -33,7 +33,7 @@ def _actual_surface_frame() -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def test_build_forecast_realization_panel_floors_negative_predicted_total_variance() -> None:
+def test_build_forecast_realization_panel_rejects_negative_predicted_total_variance() -> None:
     forecast_rows = []
     for maturity_index, maturity_days in enumerate((30, 90)):
         for moneyness_index, moneyness_point in enumerate((-0.1, 0.0)):
@@ -49,15 +49,9 @@ def test_build_forecast_realization_panel_floors_negative_predicted_total_varian
                     "predicted_total_variance": -1.0e-4 if maturity_index == 0 else 5.0e-3,
                 }
             )
-    panel = build_forecast_realization_panel(
-        actual_surface_frame=_actual_surface_frame(),
-        forecast_frame=pl.DataFrame(forecast_rows),
-        total_variance_floor=1.0e-8,
-    )
-
-    predicted_iv = panel["predicted_iv"].to_numpy().astype(np.float64)
-    predicted_iv_change = panel["predicted_iv_change"].to_numpy().astype(np.float64)
-
-    assert np.isfinite(predicted_iv).all()
-    assert np.isfinite(predicted_iv_change).all()
-    assert predicted_iv.min() > 0.0
+    with pytest.raises(ValueError, match="negative total variance"):
+        build_forecast_realization_panel(
+            actual_surface_frame=_actual_surface_frame(),
+            forecast_frame=pl.DataFrame(forecast_rows),
+            total_variance_floor=1.0e-8,
+        )

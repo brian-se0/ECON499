@@ -48,7 +48,7 @@ def read_parquet_files(paths: list[Path]) -> pl.DataFrame:
     if not paths:
         message = "read_parquet_files requires at least one parquet path."
         raise ValueError(message)
-    return pl.concat([pl.read_parquet(path) for path in paths])
+    return scan_parquet_files(paths).collect(engine="streaming")
 
 
 def scan_parquet_files(paths: list[Path]) -> pl.LazyFrame:

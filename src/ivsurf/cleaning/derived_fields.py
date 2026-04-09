@@ -1,4 +1,4 @@
-"""Derived-field construction for 15:45 SPX option rows."""
+"""Derived-field construction for decision-snapshot SPX option rows."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ def build_tau_lookup(
         calendar_name=calendar_config.calendar_name,
         timezone=calendar_config.timezone,
         decision_time=calendar_config.decision_time,
+        decision_snapshot_minutes_before_close=calendar_config.decision_snapshot_minutes_before_close,
         am_settled_roots=calendar_config.am_settled_roots,
     )
 
@@ -64,4 +65,3 @@ def add_derived_fields(frame: pl.DataFrame, tau_lookup: pl.DataFrame) -> pl.Data
         ).alias("log_moneyness"),
         ((pl.col("implied_volatility_1545") ** 2.0) * pl.col("tau_years")).alias("total_variance"),
     )
-

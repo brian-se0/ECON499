@@ -47,9 +47,10 @@ class NeuralSurfaceMLP(nn.Module):
             current_dim = hidden_width
         layers.append(nn.Linear(current_dim, output_dim))
         self.network = nn.Sequential(*layers)
+        self.output_activation = nn.Softplus()
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        return cast(torch.Tensor, self.network(features))
+        return cast(torch.Tensor, self.output_activation(self.network(features)))
 
 
 def _resolve_device(device_name: str) -> torch.device:
@@ -153,6 +154,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             torch.as_tensor(features, dtype=torch.float32),
             torch.as_tensor(targets, dtype=torch.float32),
             torch.as_tensor(observed_masks, dtype=torch.float32),
+            torch.as_tensor(vega_weights, dtype=torch.float32),
         )
         generator = torch.Generator().manual_seed(self.config.seed)
         loader = DataLoader(
@@ -181,10 +183,11 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
 
         model.train()
         for epoch in range(max_epochs):
-            for batch_features, batch_targets, batch_masks in loader:
+            for batch_features, batch_targets, batch_masks, batch_vega_weights in loader:
                 batch_features = batch_features.to(device, non_blocking=use_cuda)
                 batch_targets = batch_targets.to(device, non_blocking=use_cuda)
                 batch_masks = batch_masks.to(device, non_blocking=use_cuda)
+                batch_vega_weights = batch_vega_weights.to(device, non_blocking=use_cuda)
                 optimizer.zero_grad(set_to_none=True)
                 with torch.autocast(device_type=device.type, enabled=use_cuda):
                     predictions = model(batch_features)
@@ -192,6 +195,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                         predictions=predictions,
                         targets=batch_targets,
                         observed_mask=batch_masks,
+                        vega_weights=batch_vega_weights,
                         observed_loss_weight=self.config.observed_loss_weight,
                         imputed_loss_weight=self.config.imputed_loss_weight,
                     )

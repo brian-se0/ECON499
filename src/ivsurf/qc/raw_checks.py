@@ -23,7 +23,7 @@ def assert_target_symbol_only(
     expected_symbol: str,
     dataset_name: str,
 ) -> None:
-    """Require one explicit symbol after early pipeline filtering."""
+    """Require one explicit underlying-symbol universe after early pipeline filtering."""
 
     symbols = frame.select(pl.col(symbol_column).unique()).to_series().to_list()
     if symbols != [expected_symbol]:

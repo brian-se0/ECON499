@@ -7,7 +7,6 @@ import orjson
 import polars as pl
 import typer
 
-from ivsurf.calendar import MarketCalendar
 from ivsurf.cleaning.derived_fields import add_derived_fields, build_tau_lookup
 from ivsurf.cleaning.option_filters import apply_option_quality_flags
 from ivsurf.config import (
@@ -46,12 +45,6 @@ def main(
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     cleaning_config = CleaningConfig.model_validate(load_yaml_config(cleaning_config_path))
     calendar_config = calendar_config_from_raw(raw_config)
-    market_calendar = MarketCalendar(
-        calendar_name=calendar_config.calendar_name,
-        timezone=calendar_config.timezone,
-        decision_time=calendar_config.decision_time,
-        am_settled_roots=calendar_config.am_settled_roots,
-    )
 
     bronze_files = sorted(raw_config.bronze_dir.glob("year=*/*.parquet"))
     if limit is not None:
@@ -106,20 +99,10 @@ def main(
                 context=f"Stage 02 bronze artifact {bronze_path}",
             )
 
-            if not market_calendar.session_has_decision_time(quote_date):
-                tau_lookup = frame.select("root", "expiration").unique().with_columns(
-                    pl.lit(0.0).alias("tau_years")
-                )
-                enriched = add_derived_fields(frame=frame, tau_lookup=tau_lookup).with_columns(
-                    pl.lit("EARLY_CLOSE_SESSION").alias("invalid_reason"),
-                    pl.lit(False).alias("is_valid_observation"),
-                )
-                summary_status = "early_close_excluded"
-            else:
-                tau_lookup = build_tau_lookup(frame=frame, calendar_config=calendar_config)
-                enriched = add_derived_fields(frame=frame, tau_lookup=tau_lookup)
-                enriched = apply_option_quality_flags(frame=enriched, config=cleaning_config)
-                summary_status = "built"
+            tau_lookup = build_tau_lookup(frame=frame, calendar_config=calendar_config)
+            enriched = add_derived_fields(frame=frame, tau_lookup=tau_lookup)
+            enriched = apply_option_quality_flags(frame=enriched, config=cleaning_config)
+            summary_status = "built"
 
             output_path = _silver_path(bronze_path=bronze_path, raw_config=raw_config)
             write_parquet_frame(enriched, output_path)

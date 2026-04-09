@@ -10,6 +10,7 @@ import polars as pl
 from scipy.interpolate import RegularGridInterpolator
 from scipy.stats import norm
 
+from ivsurf.evaluation.metrics import validate_total_variance_array
 from ivsurf.hedging.book import BookInstrument
 
 
@@ -45,7 +46,11 @@ class SurfaceInterpolator:
     ) -> None:
         self.maturity_days = maturity_days.astype(np.float64)
         self.moneyness_points = moneyness_points.astype(np.float64)
-        self.total_variance_grid = total_variance_grid.astype(np.float64)
+        self.total_variance_grid = validate_total_variance_array(
+            total_variance_grid.astype(np.float64),
+            context="SurfaceInterpolator total_variance_grid",
+            allow_zero=True,
+        )
         self._interpolator = RegularGridInterpolator(
             (self.maturity_days, self.moneyness_points),
             self.total_variance_grid,
@@ -71,8 +76,13 @@ class SurfaceInterpolator:
         total_variance = float(
             self._interpolator(np.asarray([[clipped_days, clipped_moneyness]])).item()
         )
+        validate_total_variance_array(
+            np.asarray([total_variance], dtype=np.float64),
+            context="SurfaceInterpolator interpolated total variance",
+            allow_zero=True,
+        )
         tau_years = max(clipped_days / 365.0, 1.0e-12)
-        return float(np.sqrt(max(total_variance, 0.0) / tau_years))
+        return float(np.sqrt(total_variance / tau_years))
 
 
 def surface_interpolator_from_frame(

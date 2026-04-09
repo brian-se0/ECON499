@@ -117,7 +117,7 @@ def _forecast_rows(
                     and maturity_index == 0
                     and moneyness_index == 0
                 ):
-                    total_variance = -1.0e-4
+                    total_variance = 1.0e-8
                 rows.append(
                     {
                         "model_name": model_name,

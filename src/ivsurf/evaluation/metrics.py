@@ -31,9 +31,41 @@ def weighted_mse(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray) ->
     return float(np.sum(normalized * np.square(y_true - y_pred)))
 
 
+def validate_total_variance_array(
+    total_variance: np.ndarray,
+    *,
+    context: str,
+    allow_zero: bool = True,
+) -> np.ndarray:
+    values = np.asarray(total_variance, dtype=np.float64)
+    if not np.isfinite(values).all():
+        message = f"{context} contains non-finite total variance values."
+        raise ValueError(message)
+    invalid = values < 0.0 if allow_zero else values <= 0.0
+    if invalid.any():
+        relation = "negative" if allow_zero else "non-positive"
+        minimum = float(values[invalid].min())
+        message = (
+            f"{context} contains {relation} total variance values; "
+            f"minimum_invalid_value={minimum}."
+        )
+        raise ValueError(message)
+    return values
+
+
 def qlike(y_true: np.ndarray, y_pred: np.ndarray, positive_floor: float) -> float:
-    true_clipped = np.maximum(y_true, positive_floor)
-    pred_clipped = np.maximum(y_pred, positive_floor)
+    true_values = validate_total_variance_array(
+        y_true,
+        context="QLIKE y_true",
+        allow_zero=True,
+    )
+    pred_values = validate_total_variance_array(
+        y_pred,
+        context="QLIKE y_pred",
+        allow_zero=True,
+    )
+    true_clipped = np.maximum(true_values, positive_floor)
+    pred_clipped = np.maximum(pred_values, positive_floor)
     return float(np.mean((true_clipped / pred_clipped) - np.log(true_clipped / pred_clipped) - 1.0))
 
 
@@ -43,6 +75,11 @@ def total_variance_to_iv(
     *,
     total_variance_floor: float = 0.0,
 ) -> np.ndarray:
+    validated_total_variance = validate_total_variance_array(
+        total_variance,
+        context="IV conversion input",
+        allow_zero=True,
+    )
     maturity = np.maximum(maturity_years, 1.0e-12)
-    floored_total_variance = np.maximum(total_variance, total_variance_floor)
+    floored_total_variance = np.maximum(validated_total_variance, total_variance_floor)
     return np.asarray(np.sqrt(floored_total_variance / maturity), dtype=np.float64)

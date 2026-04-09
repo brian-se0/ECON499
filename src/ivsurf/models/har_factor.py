@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 
 from ivsurf.features.factors import SurfacePCAFactors
 from ivsurf.models.base import SurfaceForecastModel
+from ivsurf.models.positive_target import LogPositiveTargetAdapter
 
 
 class HarFactorSurfaceModel(SurfaceForecastModel):
@@ -20,6 +21,7 @@ class HarFactorSurfaceModel(SurfaceForecastModel):
         self.feature_scaler = StandardScaler()
         self.factor_model = Ridge(alpha=alpha)
         self.factorizer = SurfacePCAFactors(n_components=n_factors)
+        self.target_adapter = LogPositiveTargetAdapter("HarFactorSurfaceModel")
 
     def fit(
         self,
@@ -31,14 +33,30 @@ class HarFactorSurfaceModel(SurfaceForecastModel):
         lag_1 = features[:, : self.target_dim]
         lag_5 = features[:, self.target_dim : (2 * self.target_dim)]
         lag_22 = features[:, (2 * self.target_dim) : (3 * self.target_dim)]
+        transformed_targets = self.target_adapter.transform_targets(
+            targets,
+            array_name="training targets",
+        )
+        transformed_lag_1 = self.target_adapter.transform_targets(
+            lag_1,
+            array_name="lag_1 features",
+        )
+        transformed_lag_5 = self.target_adapter.transform_targets(
+            lag_5,
+            array_name="lag_5 features",
+        )
+        transformed_lag_22 = self.target_adapter.transform_targets(
+            lag_22,
+            array_name="lag_22 features",
+        )
 
-        self.factorizer.fit(targets)
-        target_factors = self.factorizer.transform(targets)
+        self.factorizer.fit(transformed_targets)
+        target_factors = self.factorizer.transform(transformed_targets)
         har_features = np.concatenate(
             [
-                self.factorizer.transform(lag_1),
-                self.factorizer.transform(lag_5),
-                self.factorizer.transform(lag_22),
+                self.factorizer.transform(transformed_lag_1),
+                self.factorizer.transform(transformed_lag_5),
+                self.factorizer.transform(transformed_lag_22),
             ],
             axis=1,
         )
@@ -52,12 +70,19 @@ class HarFactorSurfaceModel(SurfaceForecastModel):
         lag_22 = features[:, (2 * self.target_dim) : (3 * self.target_dim)]
         har_features = np.concatenate(
             [
-                self.factorizer.transform(lag_1),
-                self.factorizer.transform(lag_5),
-                self.factorizer.transform(lag_22),
+                self.factorizer.transform(
+                    self.target_adapter.transform_targets(lag_1, array_name="lag_1 features")
+                ),
+                self.factorizer.transform(
+                    self.target_adapter.transform_targets(lag_5, array_name="lag_5 features")
+                ),
+                self.factorizer.transform(
+                    self.target_adapter.transform_targets(lag_22, array_name="lag_22 features")
+                ),
             ],
             axis=1,
         )
         predicted_factors = self.factor_model.predict(self.feature_scaler.transform(har_features))
-        return self.factorizer.inverse_transform(predicted_factors)
-
+        return self.target_adapter.inverse_predictions(
+            self.factorizer.inverse_transform(predicted_factors)
+        )

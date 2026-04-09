@@ -25,6 +25,7 @@ def test_calendar_config_from_raw_projects_shared_fields() -> None:
         calendar_name="XNYS",
         timezone="America/New_York",
         decision_time=time(15, 45),
+        decision_snapshot_minutes_before_close=15,
         sample_start_date=date(2004, 1, 2),
         sample_end_date=date(2021, 4, 9),
         am_settled_roots=("SPX", "SPXW"),
@@ -35,6 +36,10 @@ def test_calendar_config_from_raw_projects_shared_fields() -> None:
     assert calendar_config.calendar_name == raw_config.calendar_name
     assert calendar_config.timezone == raw_config.timezone
     assert calendar_config.decision_time == raw_config.decision_time
+    assert (
+        calendar_config.decision_snapshot_minutes_before_close
+        == raw_config.decision_snapshot_minutes_before_close
+    )
     assert calendar_config.am_settled_roots == raw_config.am_settled_roots
 
 

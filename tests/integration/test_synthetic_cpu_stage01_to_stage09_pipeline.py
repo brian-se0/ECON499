@@ -9,6 +9,10 @@ from types import ModuleType
 from zipfile import ZipFile
 
 import polars as pl
+import pytest
+
+from ivsurf.calendar import MarketCalendar
+from ivsurf.runtime_preflight import run_runtime_preflight
 
 
 def _load_script_module(script_path: Path, module_name: str) -> ModuleType:
@@ -27,12 +31,15 @@ def _write_text(path: Path, content: str) -> Path:
 
 
 def _business_dates(start: date, count: int) -> list[date]:
+    calendar = MarketCalendar()
     dates: list[date] = []
     current = start
+    if not calendar.is_session(current):
+        current = calendar.next_trading_session(current)
     while len(dates) < count:
-        if current.weekday() < 5:
+        if calendar.is_session(current):
             dates.append(current)
-        current += timedelta(days=1)
+        current = calendar.next_trading_session(current)
     return dates
 
 
@@ -83,16 +90,16 @@ def _write_raw_zip(zip_path: Path, rows: list[dict[str, object]]) -> None:
         archive.writestr(f"{zip_path.stem}.csv", csv_text)
 
 
-def test_synthetic_cpu_stage01_to_stage09_pipeline_runs_through_stage09(
+def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committed_gpu_configs(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     workflow_label = "hpo_30_trials__train_30_epochs"
-    quote_dates = _business_dates(date(2021, 1, 4), count=10)
+    quote_dates = _business_dates(date(2021, 1, 4), count=30)
     raw_dir = tmp_path / "raw"
     manifests_dir = tmp_path / "data" / "manifests"
 
-    for quote_date, spot in zip(quote_dates, range(100, 110), strict=True):
+    for quote_date, spot in zip(quote_dates, range(100, 130), strict=True):
         _write_raw_zip(
             raw_dir / f"UnderlyingOptionsEODCalcs_{quote_date.strftime('%Y%m%d')}.zip",
             _raw_rows(quote_date, float(spot)),
@@ -146,7 +153,7 @@ def test_synthetic_cpu_stage01_to_stage09_pipeline_runs_through_stage09(
     _write_text(
         tmp_path / "configs" / "data" / "features.yaml",
         (
-            "lag_windows: [1]\n"
+            "lag_windows: [1, 5, 22]\n"
             "include_daily_change: true\n"
             "include_mask: true\n"
             "include_liquidity: true\n"
@@ -233,65 +240,21 @@ def test_synthetic_cpu_stage01_to_stage09_pipeline_runs_through_stage09(
             "lightgbm_first_metric_only: true\n"
         ),
     )
-    _write_text(tmp_path / "configs" / "models" / "ridge.yaml", 'model_name: "ridge"\nalpha: 1.0\n')
-    _write_text(
-        tmp_path / "configs" / "models" / "elasticnet.yaml",
-        'model_name: "elasticnet"\nalpha: 0.01\nl1_ratio: 0.1\nmax_iter: 1000\n',
-    )
-    _write_text(
-        tmp_path / "configs" / "models" / "har_factor.yaml",
-        'model_name: "har_factor"\nn_factors: 2\nalpha: 1.0\n',
-    )
-    _write_text(
-        tmp_path / "configs" / "models" / "lightgbm.yaml",
-        (
-            'model_name: "lightgbm"\n'
-            'device_type: "cpu"\n'
-            "n_estimators: 10\n"
-            "learning_rate: 0.1\n"
-            "num_leaves: 7\n"
-            "max_depth: 3\n"
-            "min_child_samples: 1\n"
-            "feature_fraction: 1.0\n"
-            "lambda_l2: 0.0\n"
-            'objective: "regression"\n'
-            'metric: "l2"\n'
-            "verbosity: -1\n"
-            "n_jobs: -1\n"
-            "random_state: 7\n"
-        ),
-    )
-    _write_text(
-        tmp_path / "configs" / "models" / "random_forest.yaml",
-        (
-            'model_name: "random_forest"\n'
-            "n_estimators: 10\n"
-            "max_depth: 4\n"
-            "min_samples_leaf: 1\n"
-            "random_state: 7\n"
-            "n_jobs: -1\n"
-        ),
-    )
-    _write_text(
-        tmp_path / "configs" / "models" / "neural_surface.yaml",
-        (
-            'model_name: "neural_surface"\n'
-            "hidden_width: 16\n"
-            "depth: 1\n"
-            "dropout: 0.0\n"
-            "learning_rate: 0.001\n"
-            "weight_decay: 0.0\n"
-            "epochs: 1\n"
-            "batch_size: 2\n"
-            "seed: 7\n"
-            "observed_loss_weight: 1.0\n"
-            "imputed_loss_weight: 0.25\n"
-            "calendar_penalty_weight: 0.01\n"
-            "convexity_penalty_weight: 0.01\n"
-            "roughness_penalty_weight: 0.001\n"
-            'device: "cpu"\n'
-        ),
-    )
+    lightgbm_config_path = repo_root / "configs" / "models" / "lightgbm.yaml"
+    neural_config_path = repo_root / "configs" / "models" / "neural_surface.yaml"
+    ridge_config_path = repo_root / "configs" / "models" / "ridge.yaml"
+    elasticnet_config_path = repo_root / "configs" / "models" / "elasticnet.yaml"
+    har_config_path = repo_root / "configs" / "models" / "har_factor.yaml"
+    random_forest_config_path = repo_root / "configs" / "models" / "random_forest.yaml"
+
+    try:
+        run_runtime_preflight(
+            raw_config_path=tmp_path / "configs" / "data" / "raw.yaml",
+            lightgbm_config_path=lightgbm_config_path,
+            neural_config_path=neural_config_path,
+        )
+    except (FileNotFoundError, NotADirectoryError, RuntimeError) as exc:
+        pytest.skip(f"Official GPU runtime is unavailable in this environment: {exc}")
 
     stage01 = _load_script_module(repo_root / "scripts" / "01_ingest_cboe.py", "stage01")
     stage02 = _load_script_module(repo_root / "scripts" / "02_build_option_panel.py", "stage02")
@@ -318,8 +281,26 @@ def test_synthetic_cpu_stage01_to_stage09_pipeline_runs_through_stage09(
             "random_forest",
             "neural_surface",
         ):
-            stage05.main(model_name=model_name)
-        stage06.main()
+            stage05.main(
+                model_name=model_name,
+                lightgbm_config_path=lightgbm_config_path,
+                neural_config_path=neural_config_path,
+                hpo_profile_config_path=tmp_path / "configs" / "workflow" / "hpo_30_trials.yaml",
+                training_profile_config_path=tmp_path
+                / "configs"
+                / "workflow"
+                / "train_30_epochs.yaml",
+            )
+        stage06.main(
+            ridge_config_path=ridge_config_path,
+            elasticnet_config_path=elasticnet_config_path,
+            har_config_path=har_config_path,
+            lightgbm_config_path=lightgbm_config_path,
+            random_forest_config_path=random_forest_config_path,
+            neural_config_path=neural_config_path,
+            hpo_profile_config_path=tmp_path / "configs" / "workflow" / "hpo_30_trials.yaml",
+            training_profile_config_path=tmp_path / "configs" / "workflow" / "train_30_epochs.yaml",
+        )
         stage07.main()
         stage08.main()
         stage09.main()

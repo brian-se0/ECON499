@@ -8,6 +8,7 @@ from ivsurf.config import (
     CleaningConfig,
     FeatureConfig,
     HedgingConfig,
+    NeuralModelConfig,
     RawDataConfig,
     SurfaceGridConfig,
     load_yaml_config,
@@ -40,6 +41,11 @@ def test_raw_data_defaults_include_official_thesis_window() -> None:
     )
     assert payload["sample_start_date"] == "2004-01-02"
     assert payload["sample_end_date"] == "2021-04-09"
+    assert payload["decision_snapshot_minutes_before_close"] == 15
+
+
+def test_neural_model_typed_default_is_cuda() -> None:
+    assert NeuralModelConfig().device == "cuda"
 
 
 def test_committed_data_configs_parse_into_typed_models() -> None:

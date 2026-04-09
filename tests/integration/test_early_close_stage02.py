@@ -23,7 +23,7 @@ def _write_yaml(path: Path, payload: str) -> Path:
     return path
 
 
-def test_stage02_marks_early_close_sessions_as_explicitly_excluded(tmp_path: Path) -> None:
+def test_stage02_keeps_early_close_sessions_in_the_supervised_path(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     bronze_dir = tmp_path / "data" / "bronze" / "year=2019"
     bronze_dir.mkdir(parents=True)
@@ -94,7 +94,8 @@ def test_stage02_marks_early_close_sessions_as_explicitly_excluded(tmp_path: Pat
     silver_output = pl.read_parquet(silver_dir / "year=2019" / "2019-11-29.parquet")
     summary = orjson.loads((manifests_dir / "silver_build_summary.json").read_bytes())
 
-    assert silver_output["is_valid_observation"].to_list() == [False]
-    assert silver_output["invalid_reason"].to_list() == ["EARLY_CLOSE_SESSION"]
-    assert summary[0]["status"] == "early_close_excluded"
-    assert summary[0]["valid_rows"] == 0
+    assert silver_output["is_valid_observation"].to_list() == [True]
+    assert silver_output["invalid_reason"].to_list() == [None]
+    assert float(silver_output["tau_years"][0]) > 0.0
+    assert summary[0]["status"] == "built"
+    assert summary[0]["valid_rows"] == 1

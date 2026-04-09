@@ -17,7 +17,7 @@ else
 LIMIT_ARG := --limit $(LIMIT)
 endif
 
-.PHONY: help sync sync-dev sync-tracking lint test typecheck check clean clean-ingest clean-silver clean-surfaces clean-features clean-hpo clean-train clean-stats clean-hedging clean-report ingest silver surfaces features hpo hpo-all hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
+.PHONY: help sync sync-dev sync-tracking lint test typecheck check check-runtime clean clean-ingest clean-silver clean-surfaces clean-features clean-hpo clean-train clean-stats clean-hedging clean-report ingest silver surfaces features hpo hpo-all hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
 
 help:
 	@Write-Host "Official ECON499 workflow targets:"
@@ -33,6 +33,7 @@ help:
 	@Write-Host "  make clean            - remove all derived artifacts across every pipeline stage"
 	@Write-Host "  make clean-<stage>    - clean one stage and every downstream stage"
 	@Write-Host "  make check            - run ruff, pytest, and mypy"
+	@Write-Host "  make check-runtime    - verify the official Windows/GPU/CUDA runtime contract"
 	@Write-Host "Optional variables:"
 	@Write-Host "  LIMIT=<n>             - limit files for stages 01-03 during smoke runs"
 	@Write-Host "  MODEL=<name>          - select the model for make hpo / make tune"
@@ -60,6 +61,9 @@ typecheck:
 	$(UV) run $(PYTHON) -m mypy src tests
 
 check: lint test typecheck
+
+check-runtime:
+	$(UV) run $(PYTHON) scripts/check_runtime.py
 
 clean:
 	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py all --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)
@@ -145,7 +149,7 @@ hedging:
 report:
 	$(UV) run $(PYTHON) scripts/09_make_report_artifacts.py --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
 
-pipeline: ingest silver surfaces features hpo-all train stats hedging report
+pipeline: check-runtime ingest silver surfaces features hpo-all train stats hedging report
 
 pipeline-30:
 	$(MAKE) pipeline HPO_PROFILE=hpo_30_trials TRAIN_PROFILE=train_30_epochs

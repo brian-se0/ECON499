@@ -14,12 +14,12 @@ def assert_session_has_decision_time(
     *,
     context: str,
 ) -> None:
-    """Require a session to include the configured 15:45 decision timestamp."""
+    """Require a session to include a usable vendor decision snapshot."""
 
     if not calendar.session_has_decision_time(session_date):
         message = (
-            f"{context} requires session {session_date.isoformat()} to contain the "
-            f"{calendar.decision_time.isoformat(timespec='minutes')} decision timestamp."
+            f"{context} requires session {session_date.isoformat()} to contain a usable "
+            "vendor decision snapshot."
         )
         raise TemporalIntegrityError(message)
 
@@ -29,12 +29,12 @@ def assert_next_decision_session_alignment(
     quote_date: date,
     target_date: date,
 ) -> None:
-    """Require target_date to equal the next session that actually has decision-time coverage."""
+    """Require target_date to equal the next observed trading session."""
 
-    expected_target = calendar.next_decision_session(quote_date)
+    expected_target = calendar.next_trading_session(quote_date)
     if expected_target != target_date:
         message = (
-            "Feature/target alignment violated next-decision-session causality: "
+            "Feature/target alignment violated next-trading-session causality: "
             f"quote_date={quote_date.isoformat()} "
             f"expected_target_date={expected_target.isoformat()} "
             f"actual_target_date={target_date.isoformat()}."

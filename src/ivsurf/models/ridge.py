@@ -8,6 +8,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from ivsurf.models.base import SurfaceForecastModel
+from ivsurf.models.positive_target import LogPositiveTargetAdapter
 
 
 class RidgeSurfaceModel(SurfaceForecastModel):
@@ -20,6 +21,7 @@ class RidgeSurfaceModel(SurfaceForecastModel):
                 ("model", Ridge(alpha=alpha)),
             ]
         )
+        self.target_adapter = LogPositiveTargetAdapter("RidgeSurfaceModel")
 
     def fit(
         self,
@@ -28,9 +30,11 @@ class RidgeSurfaceModel(SurfaceForecastModel):
         observed_masks: np.ndarray | None = None,
         vega_weights: np.ndarray | None = None,
     ) -> RidgeSurfaceModel:
-        self.pipeline.fit(features, targets)
+        self.pipeline.fit(
+            features,
+            self.target_adapter.transform_targets(targets, array_name="training targets"),
+        )
         return self
 
     def predict(self, features: np.ndarray) -> np.ndarray:
-        return np.asarray(self.pipeline.predict(features), dtype=np.float64)
-
+        return self.target_adapter.inverse_predictions(self.pipeline.predict(features))
