@@ -109,6 +109,7 @@ def main(
             panel = build_forecast_realization_panel(
                 actual_surface_frame=actual_surface_frame,
                 forecast_frame=forecast_frame,
+                total_variance_floor=float(metrics_config["positive_floor"]),
             )
             write_parquet_frame(panel, panel_path)
             resumer.mark_complete(

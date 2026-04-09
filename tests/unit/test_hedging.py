@@ -78,3 +78,33 @@ def test_revaluation_error_is_zero_when_forecast_matches_actual_surface() -> Non
     )
     assert abs(result.revaluation_error) < 1.0e-10
 
+
+def test_zero_vega_surface_uses_delta_only_hedge_when_book_vega_is_already_zero() -> None:
+    quote_date = date(2021, 1, 4)
+    target_date = date(2021, 1, 5)
+    zero_surface = _flat_surface_interpolator(0.0)
+    book = build_standard_book(
+        trade_date=quote_date,
+        spot=100.0,
+        level_notional=1.0,
+        skew_notional=1.0,
+        calendar_notional=0.5,
+        skew_moneyness_abs=0.1,
+        short_maturity_days=30,
+        long_maturity_days=90,
+    )
+
+    hedge = compute_delta_vega_hedge(
+        book_instruments=book,
+        trade_date=quote_date,
+        trade_spot=100.0,
+        target_date=target_date,
+        predicted_surface=zero_surface,
+        rate=0.0,
+        hedge_maturity_days=30,
+        hedge_straddle_moneyness=0.0,
+    )
+
+    assert hedge.straddle_quantity == 0.0
+    assert abs(hedge.predicted_net_delta) < 1.0e-8
+    assert hedge.predicted_net_vega == 0.0

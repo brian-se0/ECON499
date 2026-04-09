@@ -7,7 +7,13 @@ from pathlib import Path
 import polars as pl
 import typer
 
-from ivsurf.config import HpoProfileConfig, RawDataConfig, TrainingProfileConfig, load_yaml_config
+from ivsurf.config import (
+    HedgingConfig,
+    HpoProfileConfig,
+    RawDataConfig,
+    TrainingProfileConfig,
+    load_yaml_config,
+)
 from ivsurf.evaluation.alignment import load_actual_surface_frame, load_daily_spot_frame
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
@@ -40,7 +46,7 @@ def main(
     training_profile = TrainingProfileConfig.model_validate(
         load_yaml_config(training_profile_config_path)
     )
-    hedging_config = load_yaml_config(hedging_config_path)
+    hedging_config = HedgingConfig.model_validate(load_yaml_config(hedging_config_path))
     workflow_paths = resolve_workflow_run_paths(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
@@ -139,15 +145,15 @@ def main(
                         group,
                         total_variance_column="predicted_total_variance",
                     ),
-                    rate=float(hedging_config["risk_free_rate"]),
-                    level_notional=float(hedging_config["level_notional"]),
-                    skew_notional=float(hedging_config["skew_notional"]),
-                    calendar_notional=float(hedging_config["calendar_notional"]),
-                    skew_moneyness_abs=float(hedging_config["skew_moneyness_abs"]),
-                    short_maturity_days=int(hedging_config["short_maturity_days"]),
-                    long_maturity_days=int(hedging_config["long_maturity_days"]),
-                    hedge_maturity_days=int(hedging_config["hedge_maturity_days"]),
-                    hedge_straddle_moneyness=float(hedging_config["hedge_straddle_moneyness"]),
+                    rate=hedging_config.risk_free_rate,
+                    level_notional=hedging_config.level_notional,
+                    skew_notional=hedging_config.skew_notional,
+                    calendar_notional=hedging_config.calendar_notional,
+                    skew_moneyness_abs=hedging_config.skew_moneyness_abs,
+                    short_maturity_days=hedging_config.short_maturity_days,
+                    long_maturity_days=hedging_config.long_maturity_days,
+                    hedge_maturity_days=hedging_config.hedge_maturity_days,
+                    hedge_straddle_moneyness=hedging_config.hedge_straddle_moneyness,
                 )
                 results.append(asdict(result))
 
@@ -193,6 +199,7 @@ def main(
         extra_metadata={
             "benchmark_model": "no_change",
             "n_results": results_frame.height,
+            "hedge_spot_assumption": "no_change",
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,
         },

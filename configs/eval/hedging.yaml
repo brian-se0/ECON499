@@ -7,5 +7,3 @@ short_maturity_days: 30
 long_maturity_days: 90
 hedge_maturity_days: 30
 hedge_straddle_moneyness: 0.0
-hedge_spot_assumption: "no_change"
-

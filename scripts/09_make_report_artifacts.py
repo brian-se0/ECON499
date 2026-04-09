@@ -85,6 +85,17 @@ def _write_frame_bundle(
     return written
 
 
+def _slice_metric_column_for_primary_loss(primary_loss_metric: str) -> str:
+    for prefix in ("observed_", "full_"):
+        if primary_loss_metric.startswith(prefix):
+            return primary_loss_metric.removeprefix(prefix)
+    message = (
+        "Report primary_loss_metric must begin with 'observed_' or 'full_' to map to "
+        f"slice metrics, found {primary_loss_metric!r}."
+    )
+    raise ValueError(message)
+
+
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
@@ -232,7 +243,7 @@ def main(
         slice_leader_table = build_slice_leader_table(
             slice_metric_frame=slice_metric_frame,
             benchmark_model=report_config.benchmark_model,
-            metric_column="wrmse_total_variance",
+            metric_column=_slice_metric_column_for_primary_loss(report_config.primary_loss_metric),
         )
         table_names = (
             "ranked_loss_summary",

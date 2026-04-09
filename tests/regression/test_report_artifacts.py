@@ -111,6 +111,13 @@ def _forecast_rows(
                     + (0.0005 * maturity_index)
                     + (0.0004 * moneyness_index)
                 )
+                if (
+                    model_name == "no_change"
+                    and quote_date == date(2021, 1, 6)
+                    and maturity_index == 0
+                    and moneyness_index == 0
+                ):
+                    total_variance = -1.0e-4
                 rows.append(
                     {
                         "model_name": model_name,
@@ -190,6 +197,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     panel = build_forecast_realization_panel(
         actual_surface_frame=actual_surface_frame,
         forecast_frame=forecast_frame,
+        total_variance_floor=1.0e-8,
     )
     panel.write_parquet(
         manifests_dir / "stats" / workflow_label / "forecast_realization_panel.parquet"
@@ -204,7 +212,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         manifests_dir / "stats" / workflow_label / "daily_loss_frame.parquet"
     )
 
-    loss_metric = "observed_wrmse_total_variance"
+    loss_metric = "observed_mse_total_variance"
     loss_summary = (
         daily_loss_frame.group_by("model_name")
         .agg(
@@ -364,7 +372,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     stats_config_path = _write_yaml(
         tmp_path / "stats.yaml",
         (
-            'loss_metric: "observed_wrmse_total_variance"\n'
+            'loss_metric: "observed_mse_total_variance"\n'
             'benchmark_model: "no_change"\n'
             'dm_alternative: "greater"\n'
             "dm_max_lag: 0\n"
@@ -381,7 +389,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         tmp_path / "report.yaml",
         (
             'benchmark_model: "no_change"\n'
-            'primary_loss_metric: "observed_wrmse_total_variance"\n'
+            'primary_loss_metric: "observed_mse_total_variance"\n'
             'interpolation_comparison_order: ["moneyness", "maturity"]\n'
             "top_models_per_figure: 3\n"
             "stress_windows:\n"
@@ -413,6 +421,9 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     assert ranked_loss_csv == (GOLDEN_DIR / "ranked_loss_summary.csv").read_text(encoding="utf-8")
     assert slice_leaders_csv == (GOLDEN_DIR / "slice_leaders.csv").read_text(encoding="utf-8")
     assert index_md == (GOLDEN_DIR / "report_index.md").read_text(encoding="utf-8")
+    assert "nan" not in ranked_loss_csv.lower()
+    assert "nan" not in slice_leaders_csv.lower()
+    assert "nan" not in index_md.lower()
 
     run_manifest_files = sorted(
         (manifests_dir / "runs" / "09_make_report_artifacts").glob("*.json")

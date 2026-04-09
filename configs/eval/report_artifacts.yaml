@@ -1,5 +1,5 @@
 benchmark_model: "no_change"
-primary_loss_metric: "observed_wrmse_total_variance"
+primary_loss_metric: "observed_mse_total_variance"
 interpolation_comparison_order:
   - "moneyness"
   - "maturity"

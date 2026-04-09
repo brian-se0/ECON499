@@ -92,6 +92,7 @@ def test_stats_and_hedging_slice_smoke(tmp_path: Path) -> None:
     panel = build_forecast_realization_panel(
         actual_surface_frame=actual,
         forecast_frame=forecasts,
+        total_variance_floor=1.0e-8,
     )
     loss_frame = build_daily_loss_frame(
         panel=panel,
@@ -99,6 +100,7 @@ def test_stats_and_hedging_slice_smoke(tmp_path: Path) -> None:
         full_grid_weighting="uniform",
     )
     assert loss_frame.height == 2
+    assert loss_frame["observed_mse_total_variance"].is_not_null().all()
 
     actual_groups = actual.partition_by("quote_date", as_dict=True)
     lookup = {key[0]: value for key, value in actual_groups.items()}

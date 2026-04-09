@@ -70,6 +70,7 @@ def _objective_factory(
     tuning_splits: list[WalkforwardSplit],
     grid: SurfaceGrid,
     base_neural_config: NeuralModelConfig,
+    base_lightgbm_params: dict[str, object],
     training_profile: TrainingProfileConfig,
     on_split_complete: Callable[[str], None] | None = None,
 ):
@@ -84,6 +85,7 @@ def _objective_factory(
                 target_dim=matrices.targets.shape[1],
                 grid_shape=grid.shape,
                 base_neural_config=base_neural_config,
+                base_lightgbm_params=base_lightgbm_params,
             )
             if model_name == "lightgbm":
                 predictions = fit_and_predict_lightgbm(
@@ -135,6 +137,7 @@ def main(
     model_name: str,
     raw_config_path: Path = Path("configs/data/raw.yaml"),
     surface_config_path: Path = Path("configs/data/surface.yaml"),
+    lightgbm_config_path: Path = Path("configs/models/lightgbm.yaml"),
     neural_config_path: Path = Path("configs/models/neural_surface.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
     training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
@@ -144,6 +147,7 @@ def main(
     started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
+    lightgbm_params = load_yaml_config(lightgbm_config_path)
     neural_config = NeuralModelConfig.model_validate(load_yaml_config(neural_config_path))
     hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
     training_profile = TrainingProfileConfig.model_validate(
@@ -164,6 +168,7 @@ def main(
             config_paths=[
                 raw_config_path,
                 surface_config_path,
+                lightgbm_config_path,
                 neural_config_path,
                 hpo_profile_config_path,
                 training_profile_config_path,
@@ -217,6 +222,7 @@ def main(
                 tuning_splits=tuning_splits,
                 grid=grid,
                 base_neural_config=neural_config,
+                base_lightgbm_params=lightgbm_params,
                 training_profile=training_profile,
                 on_split_complete=_on_split_complete,
             ),
@@ -266,6 +272,7 @@ def main(
         config_paths=[
             raw_config_path,
             surface_config_path,
+            lightgbm_config_path,
             neural_config_path,
             hpo_profile_config_path,
             training_profile_config_path,

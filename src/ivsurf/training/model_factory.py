@@ -49,6 +49,7 @@ def suggest_model_from_trial(
     target_dim: int,
     grid_shape: tuple[int, int],
     base_neural_config: NeuralModelConfig,
+    base_lightgbm_params: Mapping[str, object] | None = None,
 ) -> Any:
     """Construct a tunable model by sampling a documented Optuna search space."""
 
@@ -67,20 +68,26 @@ def suggest_model_from_trial(
             target_dim=target_dim,
         )
     if model_name == "lightgbm":
-        return LightGBMSurfaceModel(
-            device_type="gpu",
-            n_estimators=trial.suggest_int("n_estimators", 100, 500, step=100),
-            learning_rate=trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
-            num_leaves=trial.suggest_int("num_leaves", 15, 63),
-            max_depth=trial.suggest_int("max_depth", 3, 10),
-            min_child_samples=trial.suggest_int("min_child_samples", 10, 60, step=5),
-            feature_fraction=trial.suggest_float("feature_fraction", 0.6, 1.0),
-            lambda_l2=trial.suggest_float("lambda_l2", 1.0e-4, 10.0, log=True),
-            random_state=7,
-            objective="regression",
-            metric="l2",
-            verbosity=-1,
+        params = {
+            key: value for key, value in (base_lightgbm_params or {}).items() if key != "model_name"
+        }
+        params.update(
+            {
+                "n_estimators": trial.suggest_int("n_estimators", 100, 500, step=100),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+                "num_leaves": trial.suggest_int("num_leaves", 15, 63),
+                "max_depth": trial.suggest_int("max_depth", 3, 10),
+                "min_child_samples": trial.suggest_int("min_child_samples", 10, 60, step=5),
+                "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+                "lambda_l2": trial.suggest_float("lambda_l2", 1.0e-4, 10.0, log=True),
+            }
         )
+        params.setdefault("device_type", "gpu")
+        params.setdefault("random_state", 7)
+        params.setdefault("objective", "regression")
+        params.setdefault("metric", "l2")
+        params.setdefault("verbosity", -1)
+        return LightGBMSurfaceModel(**params)
     if model_name == "random_forest":
         return RandomForestSurfaceModel(
             n_estimators=trial.suggest_int("n_estimators", 100, 500, step=100),

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
-from ivsurf.evaluation.metrics import qlike, weighted_mae, weighted_rmse
+from ivsurf.evaluation.metrics import qlike, weighted_mae, weighted_mse, weighted_rmse
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,27 +19,20 @@ class DailyLossRow:
     target_date: str
     observed_wrmse_total_variance: float
     observed_wmae_total_variance: float
+    observed_mse_total_variance: float
     observed_wrmse_iv: float
     observed_wmae_iv: float
     observed_mse_iv_change: float
     observed_qlike_total_variance: float
     full_wrmse_total_variance: float
     full_wmae_total_variance: float
+    full_mse_total_variance: float
     full_wrmse_iv: float
     full_wmae_iv: float
     full_mse_iv_change: float
     full_qlike_total_variance: float
     observed_cell_count: int
     full_grid_cell_count: int
-
-
-def _weighted_mse(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray) -> float:
-    normalized = weights.astype(np.float64, copy=False)
-    total = normalized.sum()
-    if total <= 0.0:
-        return float(np.mean(np.square(y_true - y_pred)))
-    normalized = normalized / total
-    return float(np.sum(normalized * np.square(y_true - y_pred)))
 
 
 def _full_grid_weights(frame: pl.DataFrame, weighting: str) -> np.ndarray:
@@ -81,6 +74,13 @@ def build_daily_loss_frame(
                 )
                 if observed_group.height > 0
                 else float("nan"),
+                observed_mse_total_variance=weighted_mse(
+                    y_true=observed_group["actual_completed_total_variance"].to_numpy(),
+                    y_pred=observed_group["predicted_total_variance"].to_numpy(),
+                    weights=observed_weights,
+                )
+                if observed_group.height > 0
+                else float("nan"),
                 observed_wrmse_iv=weighted_rmse(
                     y_true=observed_group["actual_completed_iv"].to_numpy(),
                     y_pred=observed_group["predicted_iv"].to_numpy(),
@@ -95,7 +95,7 @@ def build_daily_loss_frame(
                 )
                 if observed_group.height > 0
                 else float("nan"),
-                observed_mse_iv_change=_weighted_mse(
+                observed_mse_iv_change=weighted_mse(
                     y_true=observed_group["actual_iv_change"].to_numpy(),
                     y_pred=observed_group["predicted_iv_change"].to_numpy(),
                     weights=observed_weights,
@@ -119,6 +119,11 @@ def build_daily_loss_frame(
                     y_pred=group["predicted_total_variance"].to_numpy(),
                     weights=full_weights,
                 ),
+                full_mse_total_variance=weighted_mse(
+                    y_true=group["actual_completed_total_variance"].to_numpy(),
+                    y_pred=group["predicted_total_variance"].to_numpy(),
+                    weights=full_weights,
+                ),
                 full_wrmse_iv=weighted_rmse(
                     y_true=group["actual_completed_iv"].to_numpy(),
                     y_pred=group["predicted_iv"].to_numpy(),
@@ -129,7 +134,7 @@ def build_daily_loss_frame(
                     y_pred=group["predicted_iv"].to_numpy(),
                     weights=full_weights,
                 ),
-                full_mse_iv_change=_weighted_mse(
+                full_mse_iv_change=weighted_mse(
                     y_true=group["actual_iv_change"].to_numpy(),
                     y_pred=group["predicted_iv_change"].to_numpy(),
                     weights=full_weights,

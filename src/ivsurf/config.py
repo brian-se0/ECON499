@@ -67,7 +67,6 @@ class CleaningConfig(BaseModel):
     max_abs_log_moneyness: float = 0.5
     min_tau_years: float = 1.0e-4
     max_tau_years: float = 2.5
-    drop_early_close_days: bool = True
 
 
 class SurfaceGridConfig(BaseModel):
@@ -140,7 +139,7 @@ class ReportArtifactsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     benchmark_model: str = "no_change"
-    primary_loss_metric: str = "observed_wrmse_total_variance"
+    primary_loss_metric: str = "observed_mse_total_variance"
     interpolation_comparison_order: tuple[str, ...] = ("moneyness", "maturity")
     interpolation_cycles: PositiveInt | None = None
     top_models_per_figure: PositiveInt = 6
@@ -188,6 +187,22 @@ class ReportArtifactsConfig(BaseModel):
             )
             raise ValueError(message)
         return values
+
+
+class HedgingConfig(BaseModel):
+    """Explicit hedging-evaluation controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    risk_free_rate: float = 0.0
+    level_notional: float = 1.0
+    skew_notional: float = 1.0
+    calendar_notional: float = 0.5
+    skew_moneyness_abs: float = 0.10
+    short_maturity_days: PositiveInt = 30
+    long_maturity_days: PositiveInt = 90
+    hedge_maturity_days: PositiveInt = 30
+    hedge_straddle_moneyness: float = 0.0
 
 
 class OptunaPrunerConfig(BaseModel):

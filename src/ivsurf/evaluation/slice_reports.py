@@ -8,7 +8,7 @@ import numpy as np
 import polars as pl
 
 from ivsurf.config import StressWindowConfig
-from ivsurf.evaluation.metrics import qlike, weighted_mae, weighted_rmse
+from ivsurf.evaluation.metrics import qlike, weighted_mae, weighted_mse, weighted_rmse
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,21 +22,13 @@ class SliceMetricRow:
     evaluation_scope: str
     wrmse_total_variance: float
     wmae_total_variance: float
+    mse_total_variance: float
     wrmse_iv: float
     wmae_iv: float
     mse_iv_change: float
     qlike_total_variance: float
     cell_count: int
     target_day_count: int
-
-
-def _weighted_mse(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray) -> float:
-    normalized = weights.astype(np.float64, copy=False)
-    total = normalized.sum()
-    if total <= 0.0:
-        return float(np.mean(np.square(y_true - y_pred)))
-    normalized = normalized / total
-    return float(np.sum(normalized * np.square(y_true - y_pred)))
 
 
 def _scope_weights(frame: pl.DataFrame, evaluation_scope: str) -> tuple[pl.DataFrame, np.ndarray]:
@@ -71,6 +63,7 @@ def _build_metric_row(
             evaluation_scope=evaluation_scope,
             wrmse_total_variance=nan,
             wmae_total_variance=nan,
+            mse_total_variance=nan,
             wrmse_iv=nan,
             wmae_iv=nan,
             mse_iv_change=nan,
@@ -95,6 +88,11 @@ def _build_metric_row(
             y_pred=scoped["predicted_total_variance"].to_numpy(),
             weights=weights,
         ),
+        mse_total_variance=weighted_mse(
+            y_true=scoped["actual_completed_total_variance"].to_numpy(),
+            y_pred=scoped["predicted_total_variance"].to_numpy(),
+            weights=weights,
+        ),
         wrmse_iv=weighted_rmse(
             y_true=scoped["actual_completed_iv"].to_numpy(),
             y_pred=scoped["predicted_iv"].to_numpy(),
@@ -105,7 +103,7 @@ def _build_metric_row(
             y_pred=scoped["predicted_iv"].to_numpy(),
             weights=weights,
         ),
-        mse_iv_change=_weighted_mse(
+        mse_iv_change=weighted_mse(
             y_true=scoped["actual_iv_change"].to_numpy(),
             y_pred=scoped["predicted_iv_change"].to_numpy(),
             weights=weights,

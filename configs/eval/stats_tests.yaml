@@ -1,4 +1,4 @@
-loss_metric: "observed_wrmse_total_variance"
+loss_metric: "observed_mse_total_variance"
 benchmark_model: "no_change"
 dm_alternative: "greater"
 dm_max_lag: 0
@@ -10,4 +10,3 @@ mcs_bootstrap_reps: 500
 mcs_alpha: 0.10
 bootstrap_seed: 7
 full_grid_weighting: "uniform"
-

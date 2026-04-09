@@ -17,6 +17,21 @@ def _require_files(paths: list[Path], description: str) -> None:
         raise FileNotFoundError(message)
 
 
+def _require_non_null_columns(frame: pl.DataFrame, *, columns: tuple[str, ...]) -> None:
+    for column in columns:
+        if frame[column].null_count() > 0:
+            message = f"Aligned evaluation panel contains nulls in required column {column}."
+            raise ValueError(message)
+
+
+def _require_finite_float_columns(frame: pl.DataFrame, *, columns: tuple[str, ...]) -> None:
+    for column in columns:
+        values = frame[column].to_numpy().astype(np.float64, copy=False)
+        if not np.isfinite(values).all():
+            message = f"Aligned evaluation panel contains non-finite values in column {column}."
+            raise ValueError(message)
+
+
 def load_actual_surface_frame(gold_dir: Path) -> pl.DataFrame:
     """Load persisted daily surface artifacts."""
 
@@ -72,6 +87,8 @@ def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
 def build_forecast_realization_panel(
     actual_surface_frame: pl.DataFrame,
     forecast_frame: pl.DataFrame,
+    *,
+    total_variance_floor: float,
 ) -> pl.DataFrame:
     """Align forecast artifacts with realized target-day surfaces and origin-day references."""
 
@@ -99,7 +116,7 @@ def build_forecast_realization_panel(
         "origin_completed_iv",
     )
 
-    panel = (
+    joined_panel = (
         forecast_frame.join(
             actual_target,
             on=["target_date", "maturity_index", "moneyness_index"],
@@ -112,13 +129,26 @@ def build_forecast_realization_panel(
             how="left",
             validate="m:1",
         )
-        .with_columns(
-            (
-                pl.col("predicted_total_variance")
-                / (pl.col("maturity_days").cast(pl.Float64) / 365.0)
-            )
-            .sqrt()
-            .alias("predicted_iv")
+    )
+
+    _require_non_null_columns(
+        joined_panel,
+        columns=(
+            "actual_completed_total_variance",
+            "actual_completed_iv",
+            "origin_completed_iv",
+            "predicted_total_variance",
+        ),
+    )
+    _require_finite_float_columns(joined_panel, columns=("predicted_total_variance",))
+
+    panel = (
+        panel_with_completed_iv(
+            joined_panel,
+            maturity_days_column="maturity_days",
+            total_variance_column="predicted_total_variance",
+            output_iv_column="predicted_iv",
+            total_variance_floor=total_variance_floor,
         )
         .with_columns(
             (
@@ -136,15 +166,17 @@ def build_forecast_realization_panel(
         .sort(["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"])
     )
 
-    required_columns = (
-        "actual_completed_total_variance",
-        "actual_completed_iv",
-        "origin_completed_iv",
+    _require_non_null_columns(
+        panel,
+        columns=(
+            "predicted_iv",
+            "predicted_iv_change",
+        ),
     )
-    for column in required_columns:
-        if panel[column].null_count() > 0:
-            message = f"Aligned evaluation panel contains nulls in required column {column}."
-            raise ValueError(message)
+    _require_finite_float_columns(
+        panel,
+        columns=("predicted_total_variance", "predicted_iv", "predicted_iv_change"),
+    )
     return panel
 
 
@@ -153,6 +185,8 @@ def panel_with_completed_iv(
     maturity_days_column: str,
     total_variance_column: str,
     output_iv_column: str,
+    *,
+    total_variance_floor: float,
 ) -> pl.DataFrame:
     """Add an IV column derived from total variance and maturity days."""
 
@@ -163,5 +197,6 @@ def panel_with_completed_iv(
     iv = total_variance_to_iv(
         total_variance=total_variance,
         maturity_years=maturity_years,
+        total_variance_floor=total_variance_floor,
     ).reshape(-1)
     return frame.with_columns(pl.Series(output_iv_column, iv))

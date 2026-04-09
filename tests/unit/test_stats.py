@@ -66,12 +66,19 @@ def test_alignment_and_loss_frame_rank_forecasts_correctly() -> None:
     panel = build_forecast_realization_panel(
         actual_surface_frame=_actual_surface_frame(),
         forecast_frame=_forecast_frame(),
+        total_variance_floor=1.0e-8,
     )
     loss_frame = build_daily_loss_frame(
         panel=panel,
         positive_floor=1.0e-8,
         full_grid_weighting="uniform",
     )
+    assert {
+        "observed_mse_total_variance",
+        "full_mse_total_variance",
+        "observed_qlike_total_variance",
+        "full_qlike_total_variance",
+    }.issubset(set(loss_frame.columns))
     ranked = loss_frame.sort("observed_wrmse_total_variance")
     assert ranked["model_name"].to_list() == ["good", "bad"]
 

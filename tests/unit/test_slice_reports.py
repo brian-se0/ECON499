@@ -67,6 +67,7 @@ def test_build_slice_metric_frame_produces_expected_slices() -> None:
     assert frame.height == 20
     assert set(frame["slice_family"].to_list()) == {"maturity", "moneyness", "stress_window"}
     assert set(frame["evaluation_scope"].to_list()) == {"observed", "full"}
+    assert {"mse_total_variance", "qlike_total_variance"}.issubset(set(frame.columns))
 
     good_rows = frame.filter(pl.col("model_name") == "good")
     bad_rows = frame.filter(pl.col("model_name") == "bad")

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
+import optuna
 
 from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
 from ivsurf.models.neural_surface import NeuralSurfaceRegressor
+from ivsurf.training.model_factory import suggest_model_from_trial
 
 
 def test_neural_training_uses_validation_early_stopping() -> None:
@@ -97,3 +101,36 @@ def test_lightgbm_training_uses_validation_early_stopping() -> None:
     assert model.best_iterations
     assert all(best_iteration < 50 for best_iteration in model.best_iterations)
     assert model.predict(validation_features).shape == (3, 2)
+
+
+def test_lightgbm_tuning_respects_configured_device_type() -> None:
+    trial = optuna.trial.FixedTrial(
+        {
+            "n_estimators": 100,
+            "learning_rate": 0.1,
+            "num_leaves": 31,
+            "max_depth": 6,
+            "min_child_samples": 20,
+            "feature_fraction": 0.9,
+            "lambda_l2": 1.0,
+        }
+    )
+
+    model = suggest_model_from_trial(
+        model_name="lightgbm",
+        trial=cast(optuna.Trial, trial),
+        target_dim=4,
+        grid_shape=(2, 2),
+        base_neural_config=NeuralModelConfig(device="cpu"),
+        base_lightgbm_params={
+            "device_type": "cpu",
+            "objective": "regression",
+            "metric": "l2",
+            "verbosity": -1,
+            "n_jobs": -1,
+            "random_state": 7,
+        },
+    )
+
+    assert isinstance(model, LightGBMSurfaceModel)
+    assert model.params["device_type"] == "cpu"

@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from ivsurf.config import RawDataConfig, ReportArtifactsConfig, calendar_config_from_raw
+from ivsurf.config import (
+    HedgingConfig,
+    RawDataConfig,
+    ReportArtifactsConfig,
+    calendar_config_from_raw,
+)
 
 
 def test_calendar_config_from_raw_projects_shared_fields() -> None:
@@ -48,3 +53,21 @@ def test_raw_data_config_rejects_reversed_sample_window() -> None:
 def test_report_artifacts_config_rejects_summary_column_metric_name() -> None:
     with pytest.raises(ValueError, match="base daily loss metric"):
         ReportArtifactsConfig(primary_loss_metric="mean_observed_wrmse_total_variance")
+
+
+def test_hedging_config_rejects_removed_spot_assumption_key() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        HedgingConfig.model_validate(
+            {
+                "risk_free_rate": 0.0,
+                "level_notional": 1.0,
+                "skew_notional": 1.0,
+                "calendar_notional": 0.5,
+                "skew_moneyness_abs": 0.1,
+                "short_maturity_days": 30,
+                "long_maturity_days": 90,
+                "hedge_maturity_days": 30,
+                "hedge_straddle_moneyness": 0.0,
+                "hedge_spot_assumption": "no_change",
+            }
+        )

@@ -177,6 +177,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     panel = build_forecast_realization_panel(
         actual_surface_frame=actual_surface_frame,
         forecast_frame=forecast_frame,
+        total_variance_floor=1.0e-8,
     )
     panel.write_parquet(stats_dir / "forecast_realization_panel.parquet")
 
@@ -187,7 +188,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     )
     daily_loss_frame.write_parquet(stats_dir / "daily_loss_frame.parquet")
 
-    loss_metric = "observed_wrmse_total_variance"
+    loss_metric = "observed_mse_total_variance"
     loss_summary = (
         daily_loss_frame.group_by("model_name")
         .agg(
@@ -352,8 +353,8 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     mcs_table = (report_dir / "tables" / "mcs_result.csv").read_text(encoding="utf-8")
     report_index = (report_dir / "index.md").read_text(encoding="utf-8")
 
-    assert "mean_observed_wrmse_total_variance" in ranked_loss_summary
+    assert "mean_observed_mse_total_variance" in ranked_loss_summary
     assert "included_in_mcs" in mcs_table
     assert "no_change,false" in mcs_table
     assert "ridge,true" in mcs_table
-    assert "Primary loss metric: `observed_wrmse_total_variance`" in report_index
+    assert "Primary loss metric: `observed_mse_total_variance`" in report_index

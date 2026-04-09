@@ -114,16 +114,19 @@ def main(
                     pl.lit("EARLY_CLOSE_SESSION").alias("invalid_reason"),
                     pl.lit(False).alias("is_valid_observation"),
                 )
+                summary_status = "early_close_excluded"
             else:
                 tau_lookup = build_tau_lookup(frame=frame, calendar_config=calendar_config)
                 enriched = add_derived_fields(frame=frame, tau_lookup=tau_lookup)
                 enriched = apply_option_quality_flags(frame=enriched, config=cleaning_config)
+                summary_status = "built"
 
             output_path = _silver_path(bronze_path=bronze_path, raw_config=raw_config)
             write_parquet_frame(enriched, output_path)
             summary_row = {
                 "silver_path": str(output_path),
                 "quote_date": quote_date.isoformat(),
+                "status": summary_status,
                 "rows": enriched.height,
                 "valid_rows": enriched.filter(pl.col("is_valid_observation")).height,
             }
