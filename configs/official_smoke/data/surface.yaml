@@ -1,0 +1,12 @@
+moneyness_points:
+  - -0.10
+  - 0.00
+maturity_days:
+  - 7
+  - 30
+interpolation_order:
+  - "maturity"
+  - "moneyness"
+interpolation_cycles: 2
+total_variance_floor: 1.0e-8
+observed_cell_min_count: 1

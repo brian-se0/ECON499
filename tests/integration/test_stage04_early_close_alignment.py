@@ -75,6 +75,9 @@ def test_stage04_aligns_pre_early_close_features_to_the_early_close_target(tmp_p
     (manifests_dir / "gold_surface_summary.json").write_bytes(
         orjson.dumps(gold_summary, option=orjson.OPT_INDENT_2)
     )
+    (manifests_dir / "gold_surface_skipped_dates.json").write_bytes(
+        orjson.dumps([], option=orjson.OPT_INDENT_2)
+    )
 
     raw_config_path = _write_yaml(
         tmp_path / "raw.yaml",
@@ -137,3 +140,4 @@ def test_stage04_aligns_pre_early_close_features_to_the_early_close_target(tmp_p
 
     assert aligned_row.height == 1
     assert aligned_row["target_date"].to_list() == [date(2019, 11, 29)]
+    assert aligned_row["target_gap_sessions"].to_list() == [0]

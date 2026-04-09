@@ -127,13 +127,13 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
         (
             'target_symbol: "^SPX"\n'
             'allowed_option_types: ["C", "P"]\n'
-            "min_bid: 0.0\n"
-            "min_ask: 0.0\n"
+            "min_valid_bid_exclusive: 0.0\n"
+            "min_valid_ask_exclusive: 0.0\n"
             "require_ask_ge_bid: true\n"
             "require_positive_iv: true\n"
             "require_positive_vega: true\n"
             "require_positive_underlying_price: true\n"
-            "min_mid_price: 0.0\n"
+            "min_valid_mid_price_exclusive: 0.0\n"
             "max_abs_log_moneyness: 0.5\n"
             "min_tau_years: 0.0001\n"
             "max_tau_years: 2.5\n"

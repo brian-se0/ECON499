@@ -12,7 +12,10 @@ from ivsurf.calendar import MarketCalendar
 from ivsurf.config import FeatureConfig, MarketCalendarConfig
 from ivsurf.features.lagged_surface import pivot_surface_arrays, summarize_lag_window
 from ivsurf.features.liquidity import build_daily_liquidity_features
-from ivsurf.qc.timing_checks import assert_next_decision_session_alignment
+from ivsurf.qc.timing_checks import (
+    assert_next_observed_target_date,
+    assert_strictly_increasing_unique_dates,
+)
 from ivsurf.surfaces.grid import SurfaceGrid
 
 
@@ -25,6 +28,34 @@ class DailyDatasetBuildResult:
 
 def _vector_columns(prefix: str, values: np.ndarray) -> dict[str, float]:
     return {f"{prefix}_{index:04d}": float(value) for index, value in enumerate(values)}
+
+
+def _count_intervening_trading_sessions(
+    calendar: MarketCalendar,
+    *,
+    quote_date: date,
+    target_date: date,
+) -> int:
+    """Count trading sessions strictly between quote_date and target_date."""
+
+    if target_date <= quote_date:
+        message = "target_date must be after quote_date when counting target-gap sessions."
+        raise ValueError(message)
+
+    intervening_sessions = 0
+    current_date = quote_date
+    while True:
+        current_date = calendar.next_trading_session(current_date)
+        if current_date == target_date:
+            return intervening_sessions
+        if current_date > target_date:
+            message = (
+                "target_date must be a trading session reachable from quote_date: "
+                f"quote_date={quote_date.isoformat()} "
+                f"target_date={target_date.isoformat()}."
+            )
+            raise ValueError(message)
+        intervening_sessions += 1
 
 
 def build_daily_feature_dataset(
@@ -47,24 +78,45 @@ def build_daily_feature_dataset(
     )
 
     max_window = max(feature_config.lag_windows)
-    if len(surface_arrays.quote_dates) <= max_window:
+    required_surface_dates = max_window + 1
+    if feature_config.include_daily_change:
+        required_surface_dates = max(required_surface_dates, 3)
+    if len(surface_arrays.quote_dates) < required_surface_dates:
         message = (
             "Not enough daily surfaces to build a supervised feature dataset. "
-            f"Need at least {max_window + 1} decision-time-aligned dates, "
+            f"Need at least {required_surface_dates} decision-time-aligned dates, "
             f"received {len(surface_arrays.quote_dates)}."
         )
         raise ValueError(message)
 
+    assert_strictly_increasing_unique_dates(
+        surface_arrays.quote_dates,
+        context="Observed gold-surface quote dates",
+    )
+
     rows: list[dict[str, object]] = []
-    for position in range(max_window - 1, len(surface_arrays.quote_dates) - 1):
+    start_position = max_window - 1
+    if feature_config.include_daily_change:
+        start_position = max(start_position, 1)
+    for position in range(start_position, len(surface_arrays.quote_dates) - 1):
         quote_date = surface_arrays.quote_dates[position]
         target_date = surface_arrays.quote_dates[position + 1]
-        if not isinstance(quote_date, date) or not isinstance(target_date, date):
-            message = "Feature dataset expects Polars Date values for quote_date/target_date."
-            raise TypeError(message)
-        assert_next_decision_session_alignment(calendar, quote_date, target_date)
+        assert_next_observed_target_date(
+            surface_arrays.quote_dates,
+            position=position,
+            quote_date=quote_date,
+            target_date=target_date,
+        )
 
-        row: dict[str, object] = {"quote_date": quote_date, "target_date": target_date}
+        row: dict[str, object] = {
+            "quote_date": quote_date,
+            "target_date": target_date,
+            "target_gap_sessions": _count_intervening_trading_sessions(
+                calendar,
+                quote_date=quote_date,
+                target_date=target_date,
+            ),
+        }
         for window in feature_config.lag_windows:
             lag_surface = summarize_lag_window(surface_arrays.completed_surfaces, position, window)
             row.update(_vector_columns(f"feature_surface_mean_{window:02d}", lag_surface))

@@ -1,4 +1,4 @@
-"""Simplified model-confidence-set procedure."""
+"""Simplified Tmax-elimination procedure for model-set screening."""
 
 from __future__ import annotations
 
@@ -21,13 +21,14 @@ class McsIteration:
 
 @dataclass(frozen=True, slots=True)
 class McsResult:
-    """Final MCS output."""
+    """Final simplified Tmax-elimination output."""
 
     superior_models: tuple[str, ...]
     iterations: tuple[McsIteration, ...]
     alpha: float
     block_size: int
     bootstrap_reps: int
+    procedure_name: str
 
 
 def _tmax_statistic(losses: np.ndarray, bootstrap_indices: np.ndarray) -> tuple[float, np.ndarray]:
@@ -62,7 +63,7 @@ def model_confidence_set(
     bootstrap_reps: int,
     seed: int,
 ) -> McsResult:
-    """Run a Tmax-style model-confidence-set elimination routine."""
+    """Run a simplified Tmax-elimination routine over competing models."""
 
     if losses.ndim != 2:
         message = "losses must be a two-dimensional array."
@@ -119,5 +120,5 @@ def model_confidence_set(
         alpha=alpha,
         block_size=block_size,
         bootstrap_reps=bootstrap_reps,
+        procedure_name="simplified_tmax_elimination",
     )
-

@@ -9,7 +9,7 @@ Research-grade, leak-free SPX implied-volatility-surface forecasting infrastruct
 - Explicit schema validation and early SPX-underlying filtering
 - Leak-free 15:45 option cleaning and derived-field construction
 - Daily observed and completed total-variance surfaces
-- Daily feature/target dataset with next-decision-session alignment
+- Daily feature/target dataset with next observed gold-surface alignment
 - Walk-forward split manifest generation
 - Mandatory profile-backed Optuna HPO before model training
 - Baseline models plus an arbitrage-aware neural surface model
@@ -27,7 +27,8 @@ The thesis universe is the SPX underlying universe defined by `underlying_symbol
 - The `scripts/*.py` files are internal stage entrypoints invoked by the `Makefile`.
 - Direct script invocation is not the documented workflow for this project.
 - HPO is a required stage before walk-forward training. The official `pipeline` targets always run stage `05` before stage `06`.
-- The official `pipeline` target now runs `make check-runtime` first so the Windows/GPU/CUDA contract fails fast before any raw-data work starts.
+- Before the first expensive raw-data run, the required operator flow is `make check-runtime`, then `make official-smoke`, then `make pipeline`.
+- The official `pipeline` target still runs `make check-runtime` first so the Windows/GPU/CUDA contract fails fast before any raw-data work starts.
 
 ## Requirements
 
@@ -76,6 +77,7 @@ The standard high-level commands are:
 
 ```powershell
 make check-runtime
+make official-smoke
 make hpo-30
 make hpo-100
 make train-30
@@ -104,6 +106,7 @@ Validate the official runtime before the first raw-data run:
 
 ```powershell
 make check-runtime
+make official-smoke
 ```
 
 Or explicitly choose the pipeline profile:
@@ -235,4 +238,6 @@ The pipeline treats the vendor `"1545"` columns as the decision snapshot on ever
 
 Feature/target pairs are aligned to the next observed trading session. This means pre-early-close features target the early-close session itself rather than skipping to the next regular close.
 
-This is serialized in configuration so the contract-timing assumption is visible, versioned, and testable.
+When stage `03` skips a trading session because no valid rows survive cleaning, stage `04` targets the next observed gold-surface date and records `target_gap_sessions` so skipped sessions remain explicit in downstream diagnostics.
+
+This is serialized in configuration and persisted artifacts so the contract-timing assumption is visible, versioned, and testable.

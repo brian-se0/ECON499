@@ -14,6 +14,10 @@ def test_validate_raw_columns_accepts_audited_extra_columns() -> None:
     validate_raw_columns((*RAW_COLUMNS, *RAW_ALLOWED_EXTRA_COLUMNS))
 
 
-def test_validate_raw_columns_rejects_drift() -> None:
+def test_validate_raw_columns_accepts_unexpected_extra_vendor_column() -> None:
+    validate_raw_columns((*RAW_COLUMNS, "vendor_added_column_1545"))
+
+
+def test_validate_raw_columns_rejects_missing_required_column() -> None:
     with pytest.raises(SchemaDriftError):
-        validate_raw_columns((*RAW_COLUMNS[:-1], "unexpected_field"))
+        validate_raw_columns(RAW_COLUMNS[:-1])

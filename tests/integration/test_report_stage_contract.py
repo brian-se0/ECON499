@@ -316,6 +316,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
                     "alpha": 0.10,
                     "block_size": 5,
                     "bootstrap_reps": 500,
+                    "procedure_name": "simplified_tmax_elimination",
                 },
                 {
                     "loss_metric": "observed_qlike_total_variance",
@@ -337,6 +338,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
                     "alpha": 0.10,
                     "block_size": 5,
                     "bootstrap_reps": 500,
+                    "procedure_name": "simplified_tmax_elimination",
                 },
             ],
             option=orjson.OPT_INDENT_2,
@@ -431,7 +433,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
 
     assert "mean_observed_mse_total_variance" in ranked_loss_summary
     assert "mean_observed_qlike_total_variance" in qlike_ranked_loss_summary
-    assert "included_in_mcs" in mcs_table
+    assert "included_in_simplified_tmax_set" in mcs_table
     assert "no_change,false" in mcs_table
     assert "ridge,true" in mcs_table
     assert "Official loss metrics" in report_index

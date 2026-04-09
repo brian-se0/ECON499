@@ -59,13 +59,13 @@ class CleaningConfig(BaseModel):
 
     target_symbol: str = "^SPX"
     allowed_option_types: tuple[str, ...] = ("C", "P")
-    min_bid: float = 0.0
-    min_ask: float = 0.0
+    min_valid_bid_exclusive: float = 0.0
+    min_valid_ask_exclusive: float = 0.0
     require_ask_ge_bid: bool = True
     require_positive_iv: bool = True
     require_positive_vega: bool = True
     require_positive_underlying_price: bool = True
-    min_mid_price: float = 0.0
+    min_valid_mid_price_exclusive: float = 0.0
     max_abs_log_moneyness: float = 0.5
     min_tau_years: float = 1.0e-4
     max_tau_years: float = 2.5

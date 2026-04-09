@@ -342,6 +342,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
                     "alpha": 0.10,
                     "block_size": 3,
                     "bootstrap_reps": 50,
+                    "procedure_name": "simplified_tmax_elimination",
                 },
                 {
                     "loss_metric": "observed_qlike_total_variance",
@@ -363,6 +364,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
                     "alpha": 0.10,
                     "block_size": 3,
                     "bootstrap_reps": 50,
+                    "procedure_name": "simplified_tmax_elimination",
                 },
             ],
             option=orjson.OPT_INDENT_2,

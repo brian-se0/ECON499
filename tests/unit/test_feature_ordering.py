@@ -13,6 +13,7 @@ def test_ordered_feature_columns_follow_available_lag_windows() -> None:
         {
             "quote_date": [None],
             "target_date": [None],
+            "target_gap_sessions": [0],
             "feature_mask_mean_10_0000": [0.0],
             "feature_surface_mean_10_0000": [0.30],
             "feature_surface_mean_01_0000": [0.10],

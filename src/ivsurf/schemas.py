@@ -23,7 +23,6 @@ RAW_COLUMNS: tuple[str, ...] = (
     "ask_1545",
     "underlying_bid_1545",
     "underlying_ask_1545",
-    "implied_underlying_price_1545",
     "active_underlying_price_1545",
     "implied_volatility_1545",
     "delta_1545",
@@ -63,7 +62,6 @@ RAW_POLARS_SCHEMA: dict[str, object] = {
     "ask_1545": pl.Float64,
     "underlying_bid_1545": pl.Float64,
     "underlying_ask_1545": pl.Float64,
-    "implied_underlying_price_1545": pl.Float64,
     "active_underlying_price_1545": pl.Float64,
     "implied_volatility_1545": pl.Float64,
     "delta_1545": pl.Float64,
@@ -89,7 +87,6 @@ RAW_ARROW_SCHEMA: pa.Schema = pa.schema(
         pa.field("ask_1545", pa.float64(), nullable=False),
         pa.field("underlying_bid_1545", pa.float64(), nullable=False),
         pa.field("underlying_ask_1545", pa.float64(), nullable=False),
-        pa.field("implied_underlying_price_1545", pa.float64(), nullable=False),
         pa.field("active_underlying_price_1545", pa.float64(), nullable=False),
         pa.field("implied_volatility_1545", pa.float64(), nullable=False),
         pa.field("delta_1545", pa.float64(), nullable=False),
@@ -104,16 +101,14 @@ RAW_ARROW_SCHEMA: pa.Schema = pa.schema(
 
 
 def validate_raw_columns(columns: Iterable[str]) -> None:
-    """Fail fast on missing required columns or unknown raw-schema additions."""
+    """Fail fast on missing required columns while tolerating harmless raw additions."""
 
     actual = tuple(columns)
     missing = [name for name in RAW_COLUMNS if name not in actual]
-    allowed = set(RAW_COLUMNS) | set(RAW_ALLOWED_EXTRA_COLUMNS)
-    unexpected = [name for name in actual if name not in allowed]
-    if missing or unexpected:
+    if missing:
         message = (
             "Raw schema drift detected. "
             f"missing={missing if missing else '[]'} "
-            f"unexpected={unexpected if unexpected else '[]'}"
+            "unexpected=[]"
         )
         raise SchemaDriftError(message)

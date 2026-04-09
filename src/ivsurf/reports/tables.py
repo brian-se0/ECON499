@@ -104,7 +104,7 @@ def build_mcs_table(
     *,
     all_models: Sequence[str],
 ) -> pl.DataFrame:
-    """Normalize the MCS JSON payload into one row per model."""
+    """Normalize the simplified Tmax-set JSON payload into one row per model."""
 
     superior_models = set(mcs_result["superior_models"])
     all_model_names = sorted(set(all_models))
@@ -118,10 +118,12 @@ def build_mcs_table(
     return pl.DataFrame(
         {
             "model_name": all_model_names,
-            "included_in_mcs": [model_name in superior_models for model_name in all_model_names],
-            "mcs_alpha": [float(mcs_result["alpha"])] * len(all_model_names),
+            "included_in_simplified_tmax_set": [
+                model_name in superior_models for model_name in all_model_names
+            ],
+            "simplified_tmax_alpha": [float(mcs_result["alpha"])] * len(all_model_names),
         }
-    ).sort(["included_in_mcs", "model_name"], descending=[True, False])
+    ).sort(["included_in_simplified_tmax_set", "model_name"], descending=[True, False])
 
 
 def build_slice_leader_table(
@@ -242,7 +244,7 @@ def build_report_overview_markdown(
     best_loss = ranked_loss_table.row(0, named=True)
     best_hedging = ranked_hedging_table.row(0, named=True)
     included_models = ", ".join(
-        mcs_table.filter(pl.col("included_in_mcs"))["model_name"].to_list()
+        mcs_table.filter(pl.col("included_in_simplified_tmax_set"))["model_name"].to_list()
     )
     best_slice_gains = slice_leader_table.head(5)
     interpolation_row = interpolation_summary.row(0, named=True)
@@ -262,7 +264,10 @@ def build_report_overview_markdown(
             f"- Best hedging revaluation model: `{best_hedging['model_name']}` "
             f"({best_hedging['mean_abs_revaluation_error']:.6f})"
         ),
-        f"- MCS included models: {included_models if included_models else 'none'}",
+        (
+            "- Simplified Tmax-set included models: "
+            f"{included_models if included_models else 'none'}"
+        ),
         (
             "- Interpolation sensitivity summary: "
             f"mean RMSE diff {interpolation_row['mean_rmse_diff']:.6f}, "

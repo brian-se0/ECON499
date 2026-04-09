@@ -55,6 +55,7 @@ def main(
         context_hash=build_resume_context_hash(
             config_paths=[raw_config_path, surface_config_path],
             input_artifact_paths=silver_files,
+            extra_tokens={"artifact_schema_version": 2},
         ),
     )
 
@@ -100,7 +101,9 @@ def main(
             if valid_frame.is_empty():
                 summary_row = {
                     "silver_path": str(silver_path),
+                    "quote_date": quote_date.isoformat(),
                     "status": "skipped_no_valid_rows",
+                    "reason": "NO_VALID_ROWS_AFTER_CLEANING",
                 }
                 resumer.mark_complete(
                     item_id,
@@ -156,6 +159,7 @@ def main(
             summary_row = {
                 "gold_path": str(output_path),
                 "quote_date": str(output_frame["quote_date"][0]),
+                "status": "built",
                 "observed_cells": int(output_frame["observed_mask"].sum()),
             }
             resumer.mark_complete(
@@ -166,8 +170,27 @@ def main(
             summary_rows.append(summary_row)
 
     summary_path = raw_config.manifests_dir / "gold_surface_summary.json"
+    skipped_dates_path = raw_config.manifests_dir / "gold_surface_skipped_dates.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     write_bytes_atomic(summary_path, orjson.dumps(summary_rows, option=orjson.OPT_INDENT_2))
+    skipped_date_rows = [
+        {
+            "quote_date": row["quote_date"],
+            "reason": row["reason"],
+            "silver_path": row["silver_path"],
+        }
+        for row in summary_rows
+        if row.get("status") == "skipped_no_valid_rows"
+    ]
+    write_bytes_atomic(
+        skipped_dates_path,
+        orjson.dumps(skipped_date_rows, option=orjson.OPT_INDENT_2),
+    )
+    gold_output_paths = [
+        Path(str(row["gold_path"]))
+        for row in summary_rows
+        if row.get("status") == "built" and "gold_path" in row
+    ]
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
         repo_root=Path.cwd(),
@@ -178,11 +201,13 @@ def main(
             raw_config.manifests_dir / "silver_build_summary.json",
             *silver_files,
         ],
-        output_artifact_paths=[summary_path],
+        output_artifact_paths=[summary_path, skipped_dates_path, *gold_output_paths],
         data_manifest_paths=silver_files,
         extra_metadata={
             "limit": limit,
             "silver_files_processed": len(silver_files),
+            "gold_files_written": len(gold_output_paths),
+            "skipped_dates_count": len(skipped_date_rows),
             "sample_window": sample_window_label(raw_config),
             "resume_context_hash": resumer.context_hash,
         },
@@ -190,6 +215,7 @@ def main(
         mlflow_experiment_name=mlflow_experiment_name,
     )
     typer.echo(f"Saved gold surface summary to {summary_path}")
+    typer.echo(f"Saved skipped-date manifest to {skipped_dates_path}")
     typer.echo(f"Saved run manifest to {run_manifest_path}")
 
 

@@ -223,7 +223,10 @@ def main(
                 raw_config.manifests_dir / "gold_surface_summary.json",
                 *forecast_paths,
             ],
-            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+            extra_tokens={
+                "workflow_run_label": workflow_paths.run_label,
+                "artifact_schema_version": 2,
+            },
         ),
     )
 

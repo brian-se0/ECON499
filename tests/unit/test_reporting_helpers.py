@@ -150,11 +150,12 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
             "alpha": 0.10,
             "block_size": 5,
             "bootstrap_reps": 100,
+            "procedure_name": "simplified_tmax_elimination",
         },
         all_models=["no_change", "good", "bad"],
     )
     assert mcs_table["model_name"].to_list() == ["good", "no_change", "bad"]
-    assert mcs_table["included_in_mcs"].to_list() == [True, True, False]
+    assert mcs_table["included_in_simplified_tmax_set"].to_list() == [True, True, False]
 
     hedging_summary = pl.DataFrame(
         {

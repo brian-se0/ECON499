@@ -17,7 +17,7 @@ else
 LIMIT_ARG := --limit $(LIMIT)
 endif
 
-.PHONY: help sync sync-dev sync-tracking lint test typecheck check check-runtime clean clean-ingest clean-silver clean-surfaces clean-features clean-hpo clean-train clean-stats clean-hedging clean-report ingest silver surfaces features hpo hpo-all hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
+.PHONY: help sync sync-dev sync-tracking lint test typecheck check check-runtime official-smoke clean clean-ingest clean-silver clean-surfaces clean-features clean-hpo clean-train clean-stats clean-hedging clean-report ingest silver surfaces features hpo hpo-all hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
 
 help:
 	@Write-Host "Official ECON499 workflow targets:"
@@ -34,6 +34,7 @@ help:
 	@Write-Host "  make clean-<stage>    - clean one stage and every downstream stage"
 	@Write-Host "  make check            - run ruff, pytest, and mypy"
 	@Write-Host "  make check-runtime    - verify the official Windows/GPU/CUDA runtime contract"
+	@Write-Host "  make official-smoke   - run the official stage01-stage09 Windows/GPU smoke bundle"
 	@Write-Host "Optional variables:"
 	@Write-Host "  LIMIT=<n>             - limit files for stages 01-03 during smoke runs"
 	@Write-Host "  MODEL=<name>          - select the model for make hpo / make tune"
@@ -64,6 +65,9 @@ check: lint test typecheck
 
 check-runtime:
 	$(UV) run $(PYTHON) scripts/check_runtime.py
+
+official-smoke:
+	$(UV) run $(PYTHON) scripts/official_smoke.py
 
 clean:
 	$(UV) run $(PYTHON) scripts/clean_pipeline_artifacts.py all --hpo-profile-name $(HPO_PROFILE) --training-profile-name $(TRAIN_PROFILE)

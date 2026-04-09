@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
+from typing import cast
 
 import numpy as np
 import polars as pl
@@ -14,7 +16,7 @@ from ivsurf.surfaces.grid import SurfaceGrid
 class DailySurfaceArrays:
     """Dense daily arrays keyed by quote date."""
 
-    quote_dates: list[object]
+    quote_dates: list[date]
     completed_surfaces: np.ndarray
     observed_masks: np.ndarray
     observed_surfaces: np.ndarray
@@ -25,7 +27,13 @@ def pivot_surface_arrays(surface_frame: pl.DataFrame, grid: SurfaceGrid) -> Dail
     """Convert long daily surface rows into dense arrays."""
 
     sorted_frame = surface_frame.sort(["quote_date", "maturity_index", "moneyness_index"])
-    dates = sorted_frame.select(pl.col("quote_date").unique()).to_series().to_list()
+    raw_dates = (
+        sorted_frame.select(pl.col("quote_date").unique(maintain_order=True)).to_series().to_list()
+    )
+    if any(not isinstance(value, date) for value in raw_dates):
+        message = "Daily surface arrays require quote_date values to be Polars Date values."
+        raise TypeError(message)
+    dates = [cast(date, value) for value in raw_dates]
     rows_per_day = grid.shape[0] * grid.shape[1]
     observed_values = (
         sorted_frame["observed_total_variance"]

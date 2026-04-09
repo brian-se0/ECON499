@@ -54,6 +54,7 @@ def main(
         raise FileNotFoundError(message)
     output_path = raw_config.gold_dir / "daily_features.parquet"
     split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
+    skipped_dates_manifest_path = raw_config.manifests_dir / "gold_surface_skipped_dates.json"
     resumer = StageResumer(
         state_path=resume_state_path(raw_config.manifests_dir, "04_build_features"),
         stage_name="04_build_features",
@@ -65,6 +66,7 @@ def main(
                 walkforward_config_path,
             ],
             input_artifact_paths=gold_files,
+            extra_tokens={"artifact_schema_version": 2},
         ),
     )
     resume_item_id = "daily_feature_dataset"
@@ -127,6 +129,12 @@ def main(
         raw_config,
         context="Stage 04 daily feature dataset",
     )
+    assert_frame_dates_in_sample_window(
+        daily_dataset,
+        raw_config,
+        column="target_date",
+        context="Stage 04 daily feature dataset",
+    )
     write_parquet_frame(daily_dataset, output_path)
 
     dates = daily_dataset["quote_date"].to_list()
@@ -156,13 +164,18 @@ def main(
             feature_config_path,
             walkforward_config_path,
         ],
-        input_artifact_paths=[raw_config.manifests_dir / "gold_surface_summary.json"],
+        input_artifact_paths=[
+            raw_config.manifests_dir / "gold_surface_summary.json",
+            skipped_dates_manifest_path,
+            *gold_files,
+        ],
         output_artifact_paths=[output_path, split_manifest_path],
-        data_manifest_paths=[raw_config.manifests_dir / "gold_surface_summary.json"],
+        data_manifest_paths=gold_files,
         split_manifest_path=split_manifest_path,
         extra_metadata={
             "feature_rows": daily_dataset.height,
             "split_hash": split_hash,
+            "gold_input_file_count": len(gold_files),
             "sample_window": sample_window_label(raw_config),
             "resume_context_hash": resumer.context_hash,
         },

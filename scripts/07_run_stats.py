@@ -128,7 +128,10 @@ def main(
                 *tuning_manifest_paths,
                 *forecast_paths,
             ],
-            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+            extra_tokens={
+                "workflow_run_label": workflow_paths.run_label,
+                "artifact_schema_version": 2,
+            },
         ),
     )
     tuning_results = load_required_tuning_results(
@@ -294,7 +297,7 @@ def main(
             )
         progress.advance(task_id, advance=len(stats_config.loss_metrics))
 
-        progress.update(task_id, description="Stage 07 running MCS bootstrap")
+        progress.update(task_id, description="Stage 07 running simplified Tmax bootstrap")
         if not resumer.item_complete("mcs_result", required_output_paths=[mcs_result_path]):
             resumer.clear_item("mcs_result", output_paths=[mcs_result_path])
             mcs_results: list[dict[str, object]] = []
@@ -325,6 +328,7 @@ def main(
                 metadata={
                     "model_names": list(model_columns),
                     "loss_metrics": list(stats_config.loss_metrics),
+                    "procedure_name": "simplified_tmax_elimination",
                 },
             )
         progress.advance(task_id, advance=len(stats_config.loss_metrics))
@@ -382,6 +386,7 @@ def main(
         extra_metadata={
             "loss_metrics": list(stats_config.loss_metrics),
             "benchmark_model": benchmark_model,
+            "mcs_procedure_name": "simplified_tmax_elimination",
             "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
             "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
             "workflow_run_label": workflow_paths.run_label,
