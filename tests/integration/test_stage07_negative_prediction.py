@@ -121,7 +121,9 @@ def test_stage07_floors_negative_forecast_total_variance_before_iv_conversion(
     stats_config_path = _write_yaml(
         tmp_path / "stats.yaml",
         (
-            'loss_metric: "observed_mse_total_variance"\n'
+            "loss_metrics:\n"
+            '  - "observed_mse_total_variance"\n'
+            '  - "observed_qlike_total_variance"\n'
             'benchmark_model: "no_change"\n'
             'dm_alternative: "greater"\n'
             "dm_max_lag: 0\n"

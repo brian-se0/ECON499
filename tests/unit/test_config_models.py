@@ -9,6 +9,7 @@ from ivsurf.config import (
     HedgingConfig,
     RawDataConfig,
     ReportArtifactsConfig,
+    StatsTestConfig,
     calendar_config_from_raw,
 )
 
@@ -53,6 +54,24 @@ def test_raw_data_config_rejects_reversed_sample_window() -> None:
 def test_report_artifacts_config_rejects_summary_column_metric_name() -> None:
     with pytest.raises(ValueError, match="base daily loss metric"):
         ReportArtifactsConfig(primary_loss_metric="mean_observed_wrmse_total_variance")
+
+
+def test_report_artifacts_config_requires_primary_metric_in_official_metrics() -> None:
+    with pytest.raises(ValueError, match="official_loss_metrics"):
+        ReportArtifactsConfig(
+            official_loss_metrics=("observed_qlike_total_variance",),
+            primary_loss_metric="observed_mse_total_variance",
+        )
+
+
+def test_stats_test_config_rejects_duplicate_loss_metrics() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        StatsTestConfig(
+            loss_metrics=(
+                "observed_mse_total_variance",
+                "observed_mse_total_variance",
+            )
+        )
 
 
 def test_hedging_config_rejects_removed_spot_assumption_key() -> None:

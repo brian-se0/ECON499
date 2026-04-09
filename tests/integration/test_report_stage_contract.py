@@ -188,20 +188,28 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     )
     daily_loss_frame.write_parquet(stats_dir / "daily_loss_frame.parquet")
 
-    loss_metric = "observed_mse_total_variance"
+    loss_metrics = (
+        "observed_mse_total_variance",
+        "observed_qlike_total_variance",
+    )
+    summary_expressions: list[pl.Expr] = []
+    for loss_metric in loss_metrics:
+        summary_expressions.extend(
+            (
+                pl.col(loss_metric).mean().alias(f"mean_{loss_metric}"),
+                pl.col(loss_metric).std(ddof=1).alias(f"std_{loss_metric}"),
+            )
+        )
     loss_summary = (
         daily_loss_frame.group_by("model_name")
-        .agg(
-            pl.col(loss_metric).mean().alias(f"mean_{loss_metric}"),
-            pl.col(loss_metric).std(ddof=1).alias(f"std_{loss_metric}"),
-            pl.len().alias("n_target_dates"),
-        )
-        .sort(f"mean_{loss_metric}")
+        .agg(*summary_expressions, pl.len().alias("n_target_dates"))
+        .sort("mean_observed_mse_total_variance")
     )
     loss_summary.write_parquet(stats_dir / "loss_summary.parquet")
 
     dm_results = [
         {
+            "loss_metric": "observed_mse_total_variance",
             "model_a": "no_change",
             "model_b": "ridge",
             "n_obs": 3,
@@ -214,6 +222,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
             "max_lag": 0,
         },
         {
+            "loss_metric": "observed_mse_total_variance",
             "model_a": "no_change",
             "model_b": "neural_surface",
             "n_obs": 3,
@@ -225,47 +234,111 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
             "alternative": "greater",
             "max_lag": 0,
         },
+        {
+            "loss_metric": "observed_qlike_total_variance",
+            "model_a": "no_change",
+            "model_b": "ridge",
+            "n_obs": 3,
+            "mean_loss_a": 0.031,
+            "mean_loss_b": 0.018,
+            "mean_differential": 0.013,
+            "statistic": 2.2,
+            "p_value": 0.05,
+            "alternative": "greater",
+            "max_lag": 0,
+        },
+        {
+            "loss_metric": "observed_qlike_total_variance",
+            "model_a": "no_change",
+            "model_b": "neural_surface",
+            "n_obs": 3,
+            "mean_loss_a": 0.031,
+            "mean_loss_b": 0.015,
+            "mean_differential": 0.016,
+            "statistic": 2.6,
+            "p_value": 0.03,
+            "alternative": "greater",
+            "max_lag": 0,
+        },
     ]
     (stats_dir / "dm_results.json").write_bytes(
         orjson.dumps(dm_results, option=orjson.OPT_INDENT_2)
     )
     (stats_dir / "spa_result.json").write_bytes(
         orjson.dumps(
-            {
-                "benchmark_model": "no_change",
-                "candidate_models": ["ridge", "neural_surface"],
-                "observed_statistic": 2.7,
-                "p_value": 0.04,
-                "mean_differentials": [0.0011, 0.0013],
-                "superior_models_by_mean": ["ridge", "neural_surface"],
-                "block_size": 5,
-                "bootstrap_reps": 500,
-            },
+            [
+                {
+                    "loss_metric": "observed_mse_total_variance",
+                    "benchmark_model": "no_change",
+                    "candidate_models": ["ridge", "neural_surface"],
+                    "observed_statistic": 2.7,
+                    "p_value": 0.04,
+                    "mean_differentials": [0.0011, 0.0013],
+                    "superior_models_by_mean": ["ridge", "neural_surface"],
+                    "block_size": 5,
+                    "bootstrap_reps": 500,
+                },
+                {
+                    "loss_metric": "observed_qlike_total_variance",
+                    "benchmark_model": "no_change",
+                    "candidate_models": ["ridge", "neural_surface"],
+                    "observed_statistic": 2.5,
+                    "p_value": 0.05,
+                    "mean_differentials": [0.013, 0.016],
+                    "superior_models_by_mean": ["ridge", "neural_surface"],
+                    "block_size": 5,
+                    "bootstrap_reps": 500,
+                },
+            ],
             option=orjson.OPT_INDENT_2,
         )
     )
     (stats_dir / "mcs_result.json").write_bytes(
         orjson.dumps(
-            {
-                "superior_models": ["ridge", "neural_surface"],
-                "iterations": [
-                    {
-                        "included_models": ["no_change", "ridge", "neural_surface"],
-                        "test_statistic": 2.7,
-                        "p_value": 0.04,
-                        "eliminated_model": "no_change",
-                    },
-                    {
-                        "included_models": ["ridge", "neural_surface"],
-                        "test_statistic": 1.0,
-                        "p_value": 0.22,
-                        "eliminated_model": None,
-                    },
-                ],
-                "alpha": 0.10,
-                "block_size": 5,
-                "bootstrap_reps": 500,
-            },
+            [
+                {
+                    "loss_metric": "observed_mse_total_variance",
+                    "superior_models": ["ridge", "neural_surface"],
+                    "iterations": [
+                        {
+                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "test_statistic": 2.7,
+                            "p_value": 0.04,
+                            "eliminated_model": "no_change",
+                        },
+                        {
+                            "included_models": ["ridge", "neural_surface"],
+                            "test_statistic": 1.0,
+                            "p_value": 0.22,
+                            "eliminated_model": None,
+                        },
+                    ],
+                    "alpha": 0.10,
+                    "block_size": 5,
+                    "bootstrap_reps": 500,
+                },
+                {
+                    "loss_metric": "observed_qlike_total_variance",
+                    "superior_models": ["ridge", "neural_surface"],
+                    "iterations": [
+                        {
+                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "test_statistic": 2.5,
+                            "p_value": 0.05,
+                            "eliminated_model": "no_change",
+                        },
+                        {
+                            "included_models": ["ridge", "neural_surface"],
+                            "test_statistic": 0.9,
+                            "p_value": 0.25,
+                            "eliminated_model": None,
+                        },
+                    ],
+                    "alpha": 0.10,
+                    "block_size": 5,
+                    "bootstrap_reps": 500,
+                },
+            ],
             option=orjson.OPT_INDENT_2,
         )
     )
@@ -350,11 +423,16 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     ranked_loss_summary = (report_dir / "tables" / "ranked_loss_summary.csv").read_text(
         encoding="utf-8"
     )
+    qlike_ranked_loss_summary = (
+        report_dir / "tables" / "ranked_loss_summary__observed_qlike_total_variance.csv"
+    ).read_text(encoding="utf-8")
     mcs_table = (report_dir / "tables" / "mcs_result.csv").read_text(encoding="utf-8")
     report_index = (report_dir / "index.md").read_text(encoding="utf-8")
 
     assert "mean_observed_mse_total_variance" in ranked_loss_summary
+    assert "mean_observed_qlike_total_variance" in qlike_ranked_loss_summary
     assert "included_in_mcs" in mcs_table
     assert "no_change,false" in mcs_table
     assert "ridge,true" in mcs_table
+    assert "Official loss metrics" in report_index
     assert "Primary loss metric: `observed_mse_total_variance`" in report_index

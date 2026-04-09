@@ -4,10 +4,12 @@ from typing import cast
 
 import numpy as np
 import optuna
+import pytest
 
 from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
 from ivsurf.models.neural_surface import NeuralSurfaceRegressor
+from ivsurf.models.no_change import validate_no_change_feature_layout
 from ivsurf.training.model_factory import suggest_model_from_trial
 
 
@@ -134,3 +136,32 @@ def test_lightgbm_tuning_respects_configured_device_type() -> None:
 
     assert isinstance(model, LightGBMSurfaceModel)
     assert model.params["device_type"] == "cpu"
+
+
+def test_no_change_feature_layout_guard_accepts_aligned_lag1_surface_columns() -> None:
+    target_columns = ("target_total_variance_0000", "target_total_variance_0001")
+    feature_columns = (
+        "feature_surface_mean_01_0000",
+        "feature_surface_mean_01_0001",
+        "feature_surface_mean_05_0000",
+    )
+
+    validate_no_change_feature_layout(
+        feature_columns=feature_columns,
+        target_columns=target_columns,
+    )
+
+
+def test_no_change_feature_layout_guard_rejects_missing_or_reordered_lag1_columns() -> None:
+    target_columns = ("target_total_variance_0000", "target_total_variance_0001")
+    feature_columns = (
+        "feature_surface_mean_01_0001",
+        "feature_surface_mean_05_0000",
+        "feature_surface_mean_01_0000",
+    )
+
+    with pytest.raises(ValueError, match="lag-1 surface features"):
+        validate_no_change_feature_layout(
+            feature_columns=feature_columns,
+            target_columns=target_columns,
+        )

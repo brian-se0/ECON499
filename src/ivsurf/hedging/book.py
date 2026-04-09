@@ -36,7 +36,7 @@ def build_standard_book(
     call_strike = spot * math.exp(skew_moneyness_abs)
     return [
         BookInstrument(
-            "atm_call_short",
+            "atm_call_long",
             "C",
             level_notional,
             atm_strike,
@@ -44,7 +44,7 @@ def build_standard_book(
             trade_date,
         ),
         BookInstrument(
-            "atm_put_short",
+            "atm_put_long",
             "P",
             level_notional,
             atm_strike,
@@ -52,7 +52,7 @@ def build_standard_book(
             trade_date,
         ),
         BookInstrument(
-            "rr_put_short",
+            "rr_put_long",
             "P",
             skew_notional,
             put_strike,
@@ -100,4 +100,3 @@ def build_standard_book(
             trade_date,
         ),
     ]
-

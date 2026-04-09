@@ -108,3 +108,22 @@ def test_zero_vega_surface_uses_delta_only_hedge_when_book_vega_is_already_zero(
     assert hedge.straddle_quantity == 0.0
     assert abs(hedge.predicted_net_delta) < 1.0e-8
     assert hedge.predicted_net_vega == 0.0
+
+
+def test_standard_book_labels_match_position_signs() -> None:
+    book = build_standard_book(
+        trade_date=date(2021, 1, 4),
+        spot=100.0,
+        level_notional=1.0,
+        skew_notional=1.0,
+        calendar_notional=0.5,
+        skew_moneyness_abs=0.1,
+        short_maturity_days=30,
+        long_maturity_days=90,
+    )
+
+    for instrument in book:
+        if instrument.label.endswith("_short"):
+            assert instrument.quantity < 0.0
+        if instrument.label.endswith("_long"):
+            assert instrument.quantity > 0.0

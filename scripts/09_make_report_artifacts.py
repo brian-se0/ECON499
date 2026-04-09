@@ -11,6 +11,7 @@ from ivsurf.config import (
     HpoProfileConfig,
     RawDataConfig,
     ReportArtifactsConfig,
+    StatsTestConfig,
     SurfaceGridConfig,
     TrainingProfileConfig,
     load_yaml_config,
@@ -96,6 +97,48 @@ def _slice_metric_column_for_primary_loss(primary_loss_metric: str) -> str:
     raise ValueError(message)
 
 
+def _require_mapping_list(payload: object, *, artifact_name: str) -> list[dict[str, object]]:
+    if not isinstance(payload, list):
+        message = f"{artifact_name} must deserialize to a list of mappings."
+        raise ValueError(message)
+    rows: list[dict[str, object]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            message = f"{artifact_name} must contain only mappings."
+            raise ValueError(message)
+        rows.append(dict(item))
+    return rows
+
+
+def _records_for_loss_metric(
+    rows: list[dict[str, object]],
+    *,
+    loss_metric: str,
+    artifact_name: str,
+) -> list[dict[str, object]]:
+    filtered = [row for row in rows if row.get("loss_metric") == loss_metric]
+    if not filtered:
+        message = f"{artifact_name} does not contain rows for loss_metric={loss_metric!r}."
+        raise ValueError(message)
+    return filtered
+
+
+def _record_for_loss_metric(
+    rows: list[dict[str, object]],
+    *,
+    loss_metric: str,
+    artifact_name: str,
+) -> dict[str, object]:
+    filtered = _records_for_loss_metric(rows, loss_metric=loss_metric, artifact_name=artifact_name)
+    if len(filtered) != 1:
+        message = (
+            f"{artifact_name} must contain exactly one row for loss_metric={loss_metric!r}, "
+            f"found {len(filtered)}."
+        )
+        raise ValueError(message)
+    return filtered[0]
+
+
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
@@ -117,7 +160,7 @@ def main(
         load_yaml_config(training_profile_config_path)
     )
     metrics_config = load_yaml_config(metrics_config_path)
-    stats_config = load_yaml_config(stats_config_path)
+    stats_config = StatsTestConfig.model_validate(load_yaml_config(stats_config_path))
     report_config = ReportArtifactsConfig.model_validate(load_yaml_config(report_config_path))
     grid = SurfaceGrid.from_config(surface_config)
     workflow_paths = resolve_workflow_run_paths(
@@ -126,10 +169,16 @@ def main(
         training_profile_name=training_profile.profile_name,
     )
 
-    if str(stats_config["benchmark_model"]) != report_config.benchmark_model:
+    if stats_config.benchmark_model != report_config.benchmark_model:
         message = (
             "Report benchmark_model must match configs/eval/stats_tests.yaml "
-            f"({stats_config['benchmark_model']} != {report_config.benchmark_model})."
+            f"({stats_config.benchmark_model} != {report_config.benchmark_model})."
+        )
+        raise ValueError(message)
+    if stats_config.loss_metrics != report_config.official_loss_metrics:
+        message = (
+            "Report official_loss_metrics must exactly match configs/eval/stats_tests.yaml "
+            f"({stats_config.loss_metrics!r} != {report_config.official_loss_metrics!r})."
         )
         raise ValueError(message)
 
@@ -189,9 +238,18 @@ def main(
         loss_summary = pl.read_parquet(loss_summary_path)
         hedging_results = pl.read_parquet(hedging_results_path)
         hedging_summary = pl.read_parquet(hedging_summary_path)
-        dm_results = orjson.loads(dm_results_path.read_bytes())
-        spa_result = orjson.loads(spa_result_path.read_bytes())
-        mcs_result = orjson.loads(mcs_result_path.read_bytes())
+        dm_results = _require_mapping_list(
+            orjson.loads(dm_results_path.read_bytes()),
+            artifact_name="dm_results.json",
+        )
+        spa_results = _require_mapping_list(
+            orjson.loads(spa_result_path.read_bytes()),
+            artifact_name="spa_result.json",
+        )
+        mcs_results = _require_mapping_list(
+            orjson.loads(mcs_result_path.read_bytes()),
+            artifact_name="mcs_result.json",
+        )
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 09 computing slice and diagnostic reports")
@@ -218,43 +276,91 @@ def main(
         progress.advance(task_id)
 
         progress.update(task_id, description="Stage 09 building report tables")
-        summary_mean_column = f"mean_{report_config.primary_loss_metric}"
-        summary_std_column = f"std_{report_config.primary_loss_metric}"
-        _require_columns(
-            loss_summary,
-            columns=(summary_mean_column, summary_std_column, "model_name"),
-            artifact_name="loss_summary.parquet",
-        )
-        ranked_loss_table = build_ranked_loss_table(
-            loss_summary=loss_summary,
-            benchmark_model=report_config.benchmark_model,
-            metric_column=summary_mean_column,
-        )
+        primary_summary_mean_column = f"mean_{report_config.primary_loss_metric}"
+        ranked_loss_tables_by_metric: dict[str, pl.DataFrame] = {}
+        slice_leader_tables_by_metric: dict[str, pl.DataFrame] = {}
+        mcs_tables_by_metric: dict[str, pl.DataFrame] = {}
+        best_loss_by_metric_rows: list[dict[str, object]] = []
         ranked_hedging_table = build_ranked_hedging_table(
             hedging_summary=hedging_summary,
             benchmark_model=report_config.benchmark_model,
         )
-        dm_table = build_dm_results_table(dm_results)
-        spa_table = build_spa_table(spa_result)
-        mcs_table = build_mcs_table(
-            mcs_result,
-            all_models=loss_summary["model_name"].to_list(),
-        )
-        slice_leader_table = build_slice_leader_table(
-            slice_metric_frame=slice_metric_frame,
-            benchmark_model=report_config.benchmark_model,
-            metric_column=_slice_metric_column_for_primary_loss(report_config.primary_loss_metric),
-        )
-        table_names = (
-            "ranked_loss_summary",
-            "ranked_hedging_summary",
-            "dm_results",
-            "spa_result",
-            "mcs_result",
-            "slice_leaders",
-            "arbitrage_diagnostic_summary",
-            "interpolation_sensitivity_summary",
-        )
+        tables: dict[str, pl.DataFrame] = {
+            "ranked_hedging_summary": ranked_hedging_table,
+            "arbitrage_diagnostic_summary": diagnostic_summary,
+            "interpolation_sensitivity_summary": interpolation_summary,
+        }
+        all_models = loss_summary["model_name"].to_list()
+        for loss_metric in report_config.official_loss_metrics:
+            summary_mean_column = f"mean_{loss_metric}"
+            summary_std_column = f"std_{loss_metric}"
+            _require_columns(
+                loss_summary,
+                columns=(summary_mean_column, summary_std_column, "model_name"),
+                artifact_name="loss_summary.parquet",
+            )
+            ranked_loss_table = build_ranked_loss_table(
+                loss_summary=loss_summary,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=summary_mean_column,
+            )
+            dm_table = build_dm_results_table(
+                _records_for_loss_metric(
+                    dm_results,
+                    loss_metric=loss_metric,
+                    artifact_name="dm_results.json",
+                )
+            )
+            spa_table = build_spa_table(
+                _record_for_loss_metric(
+                    spa_results,
+                    loss_metric=loss_metric,
+                    artifact_name="spa_result.json",
+                )
+            )
+            mcs_table = build_mcs_table(
+                _record_for_loss_metric(
+                    mcs_results,
+                    loss_metric=loss_metric,
+                    artifact_name="mcs_result.json",
+                ),
+                all_models=all_models,
+            )
+            slice_leader_table = build_slice_leader_table(
+                slice_metric_frame=slice_metric_frame,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=_slice_metric_column_for_primary_loss(loss_metric),
+            )
+            ranked_loss_tables_by_metric[loss_metric] = ranked_loss_table
+            slice_leader_tables_by_metric[loss_metric] = slice_leader_table
+            mcs_tables_by_metric[loss_metric] = mcs_table
+            best_loss_row = ranked_loss_table.row(0, named=True)
+            best_loss_by_metric_rows.append(
+                {
+                    "loss_metric": loss_metric,
+                    "model_name": str(best_loss_row["model_name"]),
+                    "metric_value": float(best_loss_row[summary_mean_column]),
+                }
+            )
+            suffix = f"__{loss_metric}"
+            tables[f"ranked_loss_summary{suffix}"] = ranked_loss_table
+            tables[f"dm_results{suffix}"] = dm_table
+            tables[f"spa_result{suffix}"] = spa_table
+            tables[f"mcs_result{suffix}"] = mcs_table
+            tables[f"slice_leaders{suffix}"] = slice_leader_table
+            if loss_metric == report_config.primary_loss_metric:
+                tables["ranked_loss_summary"] = ranked_loss_table
+                tables["dm_results"] = dm_table
+                tables["spa_result"] = spa_table
+                tables["mcs_result"] = mcs_table
+                tables["slice_leaders"] = slice_leader_table
+
+        primary_ranked_loss_table = ranked_loss_tables_by_metric[report_config.primary_loss_metric]
+        primary_slice_leader_table = slice_leader_tables_by_metric[
+            report_config.primary_loss_metric
+        ]
+        primary_mcs_table = mcs_tables_by_metric[report_config.primary_loss_metric]
+        table_names = tuple(tables.keys())
         table_output_paths = [
             path
             for name in table_names
@@ -265,19 +371,7 @@ def main(
             table_paths = table_output_paths
         else:
             resumer.clear_item("report_tables", output_paths=table_output_paths)
-            table_paths = write_table_artifacts(
-                tables_dir,
-                tables={
-                    "ranked_loss_summary": ranked_loss_table,
-                    "ranked_hedging_summary": ranked_hedging_table,
-                    "dm_results": dm_table,
-                    "spa_result": spa_table,
-                    "mcs_result": mcs_table,
-                    "slice_leaders": slice_leader_table,
-                    "arbitrage_diagnostic_summary": diagnostic_summary,
-                    "interpolation_sensitivity_summary": interpolation_summary,
-                },
-            )
+            table_paths = write_table_artifacts(tables_dir, tables=tables)
             resumer.mark_complete(
                 "report_tables",
                 output_paths=table_paths,
@@ -339,7 +433,9 @@ def main(
 
         progress.update(task_id, description="Stage 09 rendering report figures")
         top_models = tuple(
-            ranked_loss_table.head(report_config.top_models_per_figure)["model_name"].to_list()
+            primary_ranked_loss_table.head(report_config.top_models_per_figure)[
+                "model_name"
+            ].to_list()
         )
         expected_figure_paths = [
             figures_dir / "loss_ranking.svg",
@@ -354,66 +450,66 @@ def main(
         else:
             resumer.clear_item("report_figures", output_paths=expected_figure_paths)
             figure_paths = [
-            write_ranked_bar_chart(
-                ranked_loss_table,
-                label_column="model_name",
-                value_column=summary_mean_column,
-                output_path=figures_dir / "loss_ranking.svg",
-                title=f"Loss Ranking by mean {report_config.primary_loss_metric}",
-                top_n=report_config.top_models_per_figure,
-            ),
-            write_ranked_bar_chart(
-                ranked_hedging_table,
-                label_column="model_name",
-                value_column="mean_abs_revaluation_error",
-                output_path=figures_dir / "hedging_ranking.svg",
-                title="Hedging Revaluation Ranking",
-                top_n=report_config.top_models_per_figure,
-            ),
-            write_ranked_bar_chart(
-                diagnostic_summary,
-                label_column="model_name",
-                value_column="mean_calendar_violation_magnitude",
-                output_path=figures_dir / "calendar_violation_ranking.svg",
-                title="Average Calendar Violation Magnitude",
-                top_n=report_config.top_models_per_figure + 1,
-            ),
-            write_ranked_bar_chart(
-                interpolation_sensitivity.sort("max_abs_diff", descending=True).head(15),
-                label_column="quote_date",
-                value_column="max_abs_diff",
-                output_path=figures_dir / "interpolation_sensitivity_worst_days.svg",
-                title="Worst Interpolation-Order Sensitivity Days",
-                top_n=15,
-            ),
-            write_multi_line_chart(
-                slice_metric_frame.filter(
-                    (pl.col("slice_family") == "maturity")
-                    & (pl.col("evaluation_scope") == "observed")
+                write_ranked_bar_chart(
+                    primary_ranked_loss_table,
+                    label_column="model_name",
+                    value_column=primary_summary_mean_column,
+                    output_path=figures_dir / "loss_ranking.svg",
+                    title=f"Loss Ranking by mean {report_config.primary_loss_metric}",
+                    top_n=report_config.top_models_per_figure,
                 ),
-                x_column="slice_value_float",
-                y_column="wrmse_total_variance",
-                series_column="model_name",
-                output_path=figures_dir / "maturity_slice_wrmse.svg",
-                title="Observed-Cell WRMSE by Maturity Slice",
-                x_label="Maturity (days)",
-                y_label="WRMSE total variance",
-                include_series=top_models,
-            ),
-            write_multi_line_chart(
-                slice_metric_frame.filter(
-                    (pl.col("slice_family") == "moneyness")
-                    & (pl.col("evaluation_scope") == "observed")
+                write_ranked_bar_chart(
+                    ranked_hedging_table,
+                    label_column="model_name",
+                    value_column="mean_abs_revaluation_error",
+                    output_path=figures_dir / "hedging_ranking.svg",
+                    title="Hedging Revaluation Ranking",
+                    top_n=report_config.top_models_per_figure,
                 ),
-                x_column="slice_value_float",
-                y_column="wrmse_total_variance",
-                series_column="model_name",
-                output_path=figures_dir / "moneyness_slice_wrmse.svg",
-                title="Observed-Cell WRMSE by Moneyness Slice",
-                x_label="Log-moneyness",
-                y_label="WRMSE total variance",
-                include_series=top_models,
-            ),
+                write_ranked_bar_chart(
+                    diagnostic_summary,
+                    label_column="model_name",
+                    value_column="mean_calendar_violation_magnitude",
+                    output_path=figures_dir / "calendar_violation_ranking.svg",
+                    title="Average Calendar Violation Magnitude",
+                    top_n=report_config.top_models_per_figure + 1,
+                ),
+                write_ranked_bar_chart(
+                    interpolation_sensitivity.sort("max_abs_diff", descending=True).head(15),
+                    label_column="quote_date",
+                    value_column="max_abs_diff",
+                    output_path=figures_dir / "interpolation_sensitivity_worst_days.svg",
+                    title="Worst Interpolation-Order Sensitivity Days",
+                    top_n=15,
+                ),
+                write_multi_line_chart(
+                    slice_metric_frame.filter(
+                        (pl.col("slice_family") == "maturity")
+                        & (pl.col("evaluation_scope") == "observed")
+                    ),
+                    x_column="slice_value_float",
+                    y_column="wrmse_total_variance",
+                    series_column="model_name",
+                    output_path=figures_dir / "maturity_slice_wrmse.svg",
+                    title="Observed-Cell WRMSE by Maturity Slice",
+                    x_label="Maturity (days)",
+                    y_label="WRMSE total variance",
+                    include_series=top_models,
+                ),
+                write_multi_line_chart(
+                    slice_metric_frame.filter(
+                        (pl.col("slice_family") == "moneyness")
+                        & (pl.col("evaluation_scope") == "observed")
+                    ),
+                    x_column="slice_value_float",
+                    y_column="wrmse_total_variance",
+                    series_column="model_name",
+                    output_path=figures_dir / "moneyness_slice_wrmse.svg",
+                    title="Observed-Cell WRMSE by Moneyness Slice",
+                    x_label="Log-moneyness",
+                    y_label="WRMSE total variance",
+                    include_series=top_models,
+                ),
             ]
             resumer.mark_complete(
                 "report_figures",
@@ -430,12 +526,14 @@ def main(
                 overview_path,
                 build_report_overview_markdown(
                     benchmark_model=report_config.benchmark_model,
+                    official_loss_metrics=report_config.official_loss_metrics,
                     primary_loss_metric=report_config.primary_loss_metric,
-                    summary_metric_column=summary_mean_column,
-                    ranked_loss_table=ranked_loss_table,
+                    best_loss_by_metric_rows=best_loss_by_metric_rows,
+                    summary_metric_column=primary_summary_mean_column,
+                    ranked_loss_table=primary_ranked_loss_table,
                     ranked_hedging_table=ranked_hedging_table,
-                    mcs_table=mcs_table,
-                    slice_leader_table=slice_leader_table,
+                    mcs_table=primary_mcs_table,
+                    slice_leader_table=primary_slice_leader_table,
                     interpolation_summary=interpolation_summary,
                 ),
                 encoding="utf-8",
@@ -483,7 +581,7 @@ def main(
             raw_config.manifests_dir / "gold_surface_summary.json",
             *sorted(workflow_paths.forecast_dir.glob("*.parquet")),
         ],
-        random_seed=int(stats_config["bootstrap_seed"]),
+        random_seed=stats_config.bootstrap_seed,
         extra_metadata={
             "report_dir": str(report_dir),
             "top_models_for_figures": list(top_models),

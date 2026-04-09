@@ -34,10 +34,18 @@ def build_ranked_loss_table(
     if benchmark_model not in loss_summary["model_name"].to_list():
         message = f"Benchmark model {benchmark_model} not found in loss summary."
         raise ValueError(message)
+    selected_columns = ["model_name", metric_column]
+    if metric_column.startswith("mean_"):
+        std_column = metric_column.replace("mean_", "std_", 1)
+        if std_column in loss_summary.columns:
+            selected_columns.append(std_column)
+    if "n_target_dates" in loss_summary.columns:
+        selected_columns.append("n_target_dates")
+    selected_summary = loss_summary.select(selected_columns)
     benchmark_value = float(
-        loss_summary.filter(pl.col("model_name") == benchmark_model)[metric_column][0]
+        selected_summary.filter(pl.col("model_name") == benchmark_model)[metric_column][0]
     )
-    ranked = loss_summary.sort(metric_column).with_row_index("rank", offset=1)
+    ranked = selected_summary.sort(metric_column).with_row_index("rank", offset=1)
     return ranked.with_columns(
         (
             ((pl.lit(benchmark_value) - pl.col(metric_column)) / pl.lit(benchmark_value)) * 100.0
@@ -219,7 +227,9 @@ def write_table_artifacts(
 def build_report_overview_markdown(
     *,
     benchmark_model: str,
+    official_loss_metrics: Sequence[str],
     primary_loss_metric: str,
+    best_loss_by_metric_rows: Sequence[Mapping[str, Any]],
     summary_metric_column: str,
     ranked_loss_table: pl.DataFrame,
     ranked_hedging_table: pl.DataFrame,
@@ -236,11 +246,13 @@ def build_report_overview_markdown(
     )
     best_slice_gains = slice_leader_table.head(5)
     interpolation_row = interpolation_summary.row(0, named=True)
+    official_metrics_rendered = ", ".join(f"`{metric}`" for metric in official_loss_metrics)
 
     lines = [
         "# Report Artifacts",
         "",
         f"- Benchmark model: `{benchmark_model}`",
+        f"- Official loss metrics: {official_metrics_rendered}",
         f"- Primary loss metric: `{primary_loss_metric}`",
         (
             f"- Best full-sample loss model: `{best_loss['model_name']}` "
@@ -256,9 +268,18 @@ def build_report_overview_markdown(
             f"mean RMSE diff {interpolation_row['mean_rmse_diff']:.6f}, "
             f"max abs diff {interpolation_row['max_max_abs_diff']:.6f}"
         ),
-        "",
-        "## Strongest Slice Gains",
-        "",
-        frame_to_markdown(best_slice_gains),
     ]
+    for row in best_loss_by_metric_rows:
+        lines.append(
+            f"- Best model by `{row['loss_metric']}`: `{row['model_name']}` "
+            f"({float(row['metric_value']):.6f})"
+        )
+    lines.extend(
+        [
+            "",
+            "## Strongest Slice Gains",
+            "",
+            frame_to_markdown(best_slice_gains),
+        ]
+    )
     return "\n".join(lines) + "\n"

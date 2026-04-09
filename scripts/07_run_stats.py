@@ -9,7 +9,13 @@ import orjson
 import polars as pl
 import typer
 
-from ivsurf.config import HpoProfileConfig, RawDataConfig, TrainingProfileConfig, load_yaml_config
+from ivsurf.config import (
+    HpoProfileConfig,
+    RawDataConfig,
+    StatsTestConfig,
+    TrainingProfileConfig,
+    load_yaml_config,
+)
 from ivsurf.evaluation.alignment import (
     build_forecast_realization_panel,
     load_actual_surface_frame,
@@ -43,6 +49,26 @@ def _daily_loss_matrix(
     return matrix, model_columns, tuple(pivoted["target_date"].to_list())
 
 
+def _loss_summary_frame(
+    daily_loss_frame: pl.DataFrame,
+    *,
+    loss_metrics: tuple[str, ...],
+) -> pl.DataFrame:
+    aggregation_expressions: list[pl.Expr] = []
+    for metric_column in loss_metrics:
+        aggregation_expressions.extend(
+            (
+                pl.col(metric_column).mean().alias(f"mean_{metric_column}"),
+                pl.col(metric_column).std(ddof=1).alias(f"std_{metric_column}"),
+            )
+        )
+    return (
+        daily_loss_frame.group_by("model_name")
+        .agg(*aggregation_expressions, pl.len().alias("n_target_dates"))
+        .sort(f"mean_{loss_metrics[0]}")
+    )
+
+
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
@@ -60,7 +86,7 @@ def main(
         load_yaml_config(training_profile_config_path)
     )
     metrics_config = load_yaml_config(metrics_config_path)
-    stats_config = load_yaml_config(stats_config_path)
+    stats_config = StatsTestConfig.model_validate(load_yaml_config(stats_config_path))
     workflow_paths = resolve_workflow_run_paths(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
@@ -127,7 +153,7 @@ def main(
             daily_loss_frame = build_daily_loss_frame(
                 panel=panel,
                 positive_floor=float(metrics_config["positive_floor"]),
-                full_grid_weighting=str(stats_config["full_grid_weighting"]),
+                full_grid_weighting=stats_config.full_grid_weighting,
             )
             write_parquet_frame(daily_loss_frame, daily_loss_path)
             resumer.mark_complete(
@@ -136,42 +162,57 @@ def main(
                 metadata={"rows": daily_loss_frame.height},
             )
 
-        metric_column = str(stats_config["loss_metric"])
-        loss_matrix, model_columns, _target_dates = _daily_loss_matrix(
+        primary_metric_column = stats_config.loss_metrics[0]
+        model_columns = _daily_loss_matrix(
             loss_frame=daily_loss_frame,
-            metric_column=metric_column,
-        )
-        benchmark_model = str(stats_config["benchmark_model"])
+            metric_column=primary_metric_column,
+        )[1]
+        benchmark_model = stats_config.benchmark_model
         if benchmark_model not in model_columns:
             message = f"Benchmark model {benchmark_model} not found in loss frame."
             raise ValueError(message)
-        benchmark_index = model_columns.index(benchmark_model)
-        benchmark_losses = loss_matrix[:, benchmark_index]
 
-        dm_model_count = max(len(model_columns) - 1, 0)
+        dm_model_count = max(len(model_columns) - 1, 0) * len(stats_config.loss_metrics)
         progress.update(
             task_id,
-            total=4 + dm_model_count,
+            total=4 + dm_model_count + (2 * len(stats_config.loss_metrics)),
             completed=2,
             description="Stage 07 running Diebold-Mariano tests",
         )
         if not resumer.item_complete("dm_results", required_output_paths=[dm_results_path]):
             resumer.clear_item("dm_results", output_paths=[dm_results_path])
             dm_results: list[dict[str, object]] = []
-            for model_name in model_columns:
-                if model_name == benchmark_model:
-                    continue
-                model_index = model_columns.index(model_name)
-                result = diebold_mariano_test(
-                    loss_a=benchmark_losses,
-                    loss_b=loss_matrix[:, model_index],
-                    model_a=benchmark_model,
-                    model_b=model_name,
-                    alternative=str(stats_config["dm_alternative"]),
-                    max_lag=int(stats_config["dm_max_lag"]),
+            for metric_column in stats_config.loss_metrics:
+                loss_matrix, metric_model_columns, _ = _daily_loss_matrix(
+                    loss_frame=daily_loss_frame,
+                    metric_column=metric_column,
                 )
-                dm_results.append(asdict(result))
-                progress.advance(task_id)
+                if metric_model_columns != model_columns:
+                    message = (
+                        "All loss metrics must produce the same model ordering in the daily "
+                        f"loss frame, found {metric_model_columns!r} != {model_columns!r} "
+                        f"for {metric_column}."
+                    )
+                    raise ValueError(message)
+                benchmark_index = metric_model_columns.index(benchmark_model)
+                benchmark_losses = loss_matrix[:, benchmark_index]
+                for model_name in metric_model_columns:
+                    if model_name == benchmark_model:
+                        continue
+                    model_index = metric_model_columns.index(model_name)
+                    result_row = asdict(
+                        diebold_mariano_test(
+                            loss_a=benchmark_losses,
+                            loss_b=loss_matrix[:, model_index],
+                            model_a=benchmark_model,
+                            model_b=model_name,
+                            alternative=stats_config.dm_alternative,
+                            max_lag=stats_config.dm_max_lag,
+                        )
+                    )
+                    result_row["loss_metric"] = metric_column
+                    dm_results.append(result_row)
+                    progress.advance(task_id)
             write_bytes_atomic(
                 dm_results_path,
                 orjson.dumps(dm_results, option=orjson.OPT_INDENT_2),
@@ -179,77 +220,108 @@ def main(
             resumer.mark_complete(
                 "dm_results",
                 output_paths=[dm_results_path],
-                metadata={"model_count": len(model_columns)},
+                metadata={
+                    "model_count": len(model_columns),
+                    "loss_metrics": list(stats_config.loss_metrics),
+                },
             )
         else:
             progress.advance(task_id, advance=dm_model_count)
 
-        candidate_models = tuple(model for model in model_columns if model != benchmark_model)
-        candidate_losses = np.column_stack(
-            [loss_matrix[:, model_columns.index(model)] for model in candidate_models]
-        )
         progress.update(task_id, description="Stage 07 running SPA bootstrap")
         if not resumer.item_complete("spa_result", required_output_paths=[spa_result_path]):
             resumer.clear_item("spa_result", output_paths=[spa_result_path])
-            spa_result = superior_predictive_ability_test(
-                benchmark_losses=benchmark_losses,
-                candidate_losses=candidate_losses,
-                benchmark_model=benchmark_model,
-                candidate_models=candidate_models,
-                block_size=int(stats_config["spa_block_size"]),
-                bootstrap_reps=int(stats_config["spa_bootstrap_reps"]),
-                seed=int(stats_config["bootstrap_seed"]),
-            )
+            spa_results: list[dict[str, object]] = []
+            for metric_column in stats_config.loss_metrics:
+                loss_matrix, metric_model_columns, _ = _daily_loss_matrix(
+                    loss_frame=daily_loss_frame,
+                    metric_column=metric_column,
+                )
+                candidate_models = tuple(
+                    model for model in metric_model_columns if model != benchmark_model
+                )
+                candidate_losses = np.column_stack(
+                    [
+                        loss_matrix[:, metric_model_columns.index(model)]
+                        for model in candidate_models
+                    ]
+                )
+                benchmark_index = metric_model_columns.index(benchmark_model)
+                benchmark_losses = loss_matrix[:, benchmark_index]
+                spa_result = asdict(
+                    superior_predictive_ability_test(
+                        benchmark_losses=benchmark_losses,
+                        candidate_losses=candidate_losses,
+                        benchmark_model=benchmark_model,
+                        candidate_models=candidate_models,
+                        block_size=stats_config.spa_block_size,
+                        bootstrap_reps=stats_config.spa_bootstrap_reps,
+                        seed=stats_config.bootstrap_seed,
+                    )
+                )
+                spa_result["loss_metric"] = metric_column
+                spa_results.append(spa_result)
             write_bytes_atomic(
                 spa_result_path,
-                orjson.dumps(asdict(spa_result), option=orjson.OPT_INDENT_2),
+                orjson.dumps(spa_results, option=orjson.OPT_INDENT_2),
             )
             resumer.mark_complete(
                 "spa_result",
                 output_paths=[spa_result_path],
-                metadata={"candidate_models": list(candidate_models)},
+                metadata={"loss_metrics": list(stats_config.loss_metrics)},
             )
-        progress.advance(task_id)
+        progress.advance(task_id, advance=len(stats_config.loss_metrics))
 
         progress.update(task_id, description="Stage 07 running MCS bootstrap")
         if not resumer.item_complete("mcs_result", required_output_paths=[mcs_result_path]):
             resumer.clear_item("mcs_result", output_paths=[mcs_result_path])
-            mcs_result = model_confidence_set(
-                losses=loss_matrix,
-                model_names=model_columns,
-                alpha=float(stats_config["mcs_alpha"]),
-                block_size=int(stats_config["mcs_block_size"]),
-                bootstrap_reps=int(stats_config["mcs_bootstrap_reps"]),
-                seed=int(stats_config["bootstrap_seed"]),
-            )
+            mcs_results: list[dict[str, object]] = []
+            for metric_column in stats_config.loss_metrics:
+                loss_matrix, metric_model_columns, _ = _daily_loss_matrix(
+                    loss_frame=daily_loss_frame,
+                    metric_column=metric_column,
+                )
+                mcs_result = asdict(
+                    model_confidence_set(
+                        losses=loss_matrix,
+                        model_names=metric_model_columns,
+                        alpha=stats_config.mcs_alpha,
+                        block_size=stats_config.mcs_block_size,
+                        bootstrap_reps=stats_config.mcs_bootstrap_reps,
+                        seed=stats_config.bootstrap_seed,
+                    )
+                )
+                mcs_result["loss_metric"] = metric_column
+                mcs_results.append(mcs_result)
             write_bytes_atomic(
                 mcs_result_path,
-                orjson.dumps(asdict(mcs_result), option=orjson.OPT_INDENT_2),
+                orjson.dumps(mcs_results, option=orjson.OPT_INDENT_2),
             )
             resumer.mark_complete(
                 "mcs_result",
                 output_paths=[mcs_result_path],
-                metadata={"model_names": list(model_columns)},
+                metadata={
+                    "model_names": list(model_columns),
+                    "loss_metrics": list(stats_config.loss_metrics),
+                },
             )
-        progress.advance(task_id)
+        progress.advance(task_id, advance=len(stats_config.loss_metrics))
 
         progress.update(task_id, description="Stage 07 writing summary tables")
         if not resumer.item_complete("loss_summary", required_output_paths=[loss_summary_path]):
             resumer.clear_item("loss_summary", output_paths=[loss_summary_path])
-            summary_frame = (
-                daily_loss_frame.group_by("model_name")
-                .agg(
-                    pl.col(metric_column).mean().alias(f"mean_{metric_column}"),
-                    pl.col(metric_column).std(ddof=1).alias(f"std_{metric_column}"),
-                    pl.len().alias("n_target_dates"),
-                )
-                .sort(f"mean_{metric_column}")
+            summary_frame = _loss_summary_frame(
+                daily_loss_frame,
+                loss_metrics=stats_config.loss_metrics,
             )
             write_parquet_frame(summary_frame, loss_summary_path)
             resumer.mark_complete(
                 "loss_summary",
                 output_paths=[loss_summary_path],
-                metadata={"model_count": len(model_columns)},
+                metadata={
+                    "model_count": len(model_columns),
+                    "loss_metrics": list(stats_config.loss_metrics),
+                },
             )
         progress.advance(task_id)
 
@@ -282,9 +354,9 @@ def main(
             raw_config.manifests_dir / "gold_surface_summary.json",
             *forecast_paths,
         ],
-        random_seed=int(stats_config["bootstrap_seed"]),
+        random_seed=stats_config.bootstrap_seed,
         extra_metadata={
-            "loss_metric": metric_column,
+            "loss_metrics": list(stats_config.loss_metrics),
             "benchmark_model": benchmark_model,
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,

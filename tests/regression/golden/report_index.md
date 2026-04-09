@@ -1,11 +1,14 @@
 # Report Artifacts
 
 - Benchmark model: `no_change`
+- Official loss metrics: `observed_mse_total_variance`, `observed_qlike_total_variance`
 - Primary loss metric: `observed_mse_total_variance`
 - Best full-sample loss model: `ridge` (0.000018)
 - Best hedging revaluation model: `no_change` (0.810879)
 - MCS included models: neural_surface, ridge
 - Interpolation sensitivity summary: mean RMSE diff 0.004684, max abs diff 0.009312
+- Best model by `observed_mse_total_variance`: `ridge` (0.000018)
+- Best model by `observed_qlike_total_variance`: `neural_surface` (0.153613)
 
 ## Strongest Slice Gains
 

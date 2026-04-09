@@ -114,6 +114,46 @@ class WalkforwardConfig(BaseModel):
     expanding_train: bool = True
 
 
+class StatsTestConfig(BaseModel):
+    """Official statistical-evaluation configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    loss_metrics: tuple[str, ...] = (
+        "observed_mse_total_variance",
+        "observed_qlike_total_variance",
+    )
+    benchmark_model: str = "no_change"
+    dm_alternative: Literal["two-sided", "greater", "less"] = "greater"
+    dm_max_lag: int = Field(default=0, ge=0)
+    spa_block_size: PositiveInt = 5
+    spa_bootstrap_reps: PositiveInt = 500
+    spa_alpha: float = Field(default=0.10, gt=0.0, lt=1.0)
+    mcs_block_size: PositiveInt = 5
+    mcs_bootstrap_reps: PositiveInt = 500
+    mcs_alpha: float = Field(default=0.10, gt=0.0, lt=1.0)
+    bootstrap_seed: int = 7
+    full_grid_weighting: Literal["uniform"] = "uniform"
+
+    @field_validator("loss_metrics")
+    @classmethod
+    def validate_loss_metrics(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if not values:
+            message = "loss_metrics must contain at least one daily loss metric."
+            raise ValueError(message)
+        if len(set(values)) != len(values):
+            message = "loss_metrics must not contain duplicate entries."
+            raise ValueError(message)
+        for value in values:
+            if value.startswith("mean_") or value.startswith("std_"):
+                message = (
+                    "loss_metrics must name base daily loss metrics, "
+                    f"found summary-like value {value!r}."
+                )
+                raise ValueError(message)
+        return values
+
+
 class StressWindowConfig(BaseModel):
     """Named stress subperiod for slice reporting."""
 
@@ -139,6 +179,10 @@ class ReportArtifactsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     benchmark_model: str = "no_change"
+    official_loss_metrics: tuple[str, ...] = (
+        "observed_mse_total_variance",
+        "observed_qlike_total_variance",
+    )
     primary_loss_metric: str = "observed_mse_total_variance"
     interpolation_comparison_order: tuple[str, ...] = ("moneyness", "maturity")
     interpolation_cycles: PositiveInt | None = None
@@ -170,6 +214,36 @@ class ReportArtifactsConfig(BaseModel):
             message = (
                 "primary_loss_metric must name the base daily loss metric, "
                 "not a summary column prefix."
+            )
+            raise ValueError(message)
+        return value
+
+    @field_validator("official_loss_metrics")
+    @classmethod
+    def validate_official_loss_metrics(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if not values:
+            message = "official_loss_metrics must contain at least one loss metric."
+            raise ValueError(message)
+        if len(set(values)) != len(values):
+            message = "official_loss_metrics must not contain duplicate entries."
+            raise ValueError(message)
+        for value in values:
+            if value.startswith("mean_") or value.startswith("std_"):
+                message = (
+                    "official_loss_metrics must name base daily loss metrics, "
+                    f"found summary-like value {value!r}."
+                )
+                raise ValueError(message)
+        return values
+
+    @field_validator("primary_loss_metric")
+    @classmethod
+    def validate_primary_loss_metric_in_official_metrics(cls, value: str, info: Any) -> str:
+        official_metrics = info.data.get("official_loss_metrics")
+        if isinstance(official_metrics, tuple) and value not in official_metrics:
+            message = (
+                "primary_loss_metric must be included in official_loss_metrics, "
+                f"found {value!r} not in {official_metrics!r}."
             )
             raise ValueError(message)
         return value

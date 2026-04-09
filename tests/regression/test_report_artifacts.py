@@ -212,20 +212,28 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         manifests_dir / "stats" / workflow_label / "daily_loss_frame.parquet"
     )
 
-    loss_metric = "observed_mse_total_variance"
+    loss_metrics = (
+        "observed_mse_total_variance",
+        "observed_qlike_total_variance",
+    )
+    summary_expressions: list[pl.Expr] = []
+    for loss_metric in loss_metrics:
+        summary_expressions.extend(
+            (
+                pl.col(loss_metric).mean().alias(f"mean_{loss_metric}"),
+                pl.col(loss_metric).std(ddof=1).alias(f"std_{loss_metric}"),
+            )
+        )
     loss_summary = (
         daily_loss_frame.group_by("model_name")
-        .agg(
-            pl.col(loss_metric).mean().alias(f"mean_{loss_metric}"),
-            pl.col(loss_metric).std(ddof=1).alias(f"std_{loss_metric}"),
-            pl.len().alias("n_target_dates"),
-        )
-        .sort(f"mean_{loss_metric}")
+        .agg(*summary_expressions, pl.len().alias("n_target_dates"))
+        .sort("mean_observed_mse_total_variance")
     )
     loss_summary.write_parquet(manifests_dir / "stats" / workflow_label / "loss_summary.parquet")
 
     dm_results = [
         {
+            "loss_metric": "observed_mse_total_variance",
             "model_a": "no_change",
             "model_b": "ridge",
             "n_obs": 3,
@@ -238,6 +246,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             "max_lag": 0,
         },
         {
+            "loss_metric": "observed_mse_total_variance",
             "model_a": "no_change",
             "model_b": "neural_surface",
             "n_obs": 3,
@@ -249,47 +258,111 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             "alternative": "greater",
             "max_lag": 0,
         },
+        {
+            "loss_metric": "observed_qlike_total_variance",
+            "model_a": "no_change",
+            "model_b": "ridge",
+            "n_obs": 3,
+            "mean_loss_a": 0.029,
+            "mean_loss_b": 0.011,
+            "mean_differential": 0.018,
+            "statistic": 2.0,
+            "p_value": 0.08,
+            "alternative": "greater",
+            "max_lag": 0,
+        },
+        {
+            "loss_metric": "observed_qlike_total_variance",
+            "model_a": "no_change",
+            "model_b": "neural_surface",
+            "n_obs": 3,
+            "mean_loss_a": 0.029,
+            "mean_loss_b": 0.0,
+            "mean_differential": 0.029,
+            "statistic": 3.1,
+            "p_value": 0.02,
+            "alternative": "greater",
+            "max_lag": 0,
+        },
     ]
     (manifests_dir / "stats" / workflow_label / "dm_results.json").write_bytes(
         orjson.dumps(dm_results, option=orjson.OPT_INDENT_2)
     )
     (manifests_dir / "stats" / workflow_label / "spa_result.json").write_bytes(
         orjson.dumps(
-            {
-                "benchmark_model": "no_change",
-                "candidate_models": ["ridge", "neural_surface"],
-                "observed_statistic": 2.5,
-                "p_value": 0.04,
-                "mean_differentials": [0.0007, 0.0024],
-                "superior_models_by_mean": ["ridge", "neural_surface"],
-                "block_size": 3,
-                "bootstrap_reps": 50,
-            },
+            [
+                {
+                    "loss_metric": "observed_mse_total_variance",
+                    "benchmark_model": "no_change",
+                    "candidate_models": ["ridge", "neural_surface"],
+                    "observed_statistic": 2.5,
+                    "p_value": 0.04,
+                    "mean_differentials": [0.0007, 0.0024],
+                    "superior_models_by_mean": ["ridge", "neural_surface"],
+                    "block_size": 3,
+                    "bootstrap_reps": 50,
+                },
+                {
+                    "loss_metric": "observed_qlike_total_variance",
+                    "benchmark_model": "no_change",
+                    "candidate_models": ["ridge", "neural_surface"],
+                    "observed_statistic": 2.3,
+                    "p_value": 0.05,
+                    "mean_differentials": [0.018, 0.029],
+                    "superior_models_by_mean": ["ridge", "neural_surface"],
+                    "block_size": 3,
+                    "bootstrap_reps": 50,
+                },
+            ],
             option=orjson.OPT_INDENT_2,
         )
     )
     (manifests_dir / "stats" / workflow_label / "mcs_result.json").write_bytes(
         orjson.dumps(
-            {
-                "superior_models": ["ridge", "neural_surface"],
-                "iterations": [
-                    {
-                        "included_models": ["no_change", "ridge", "neural_surface"],
-                        "test_statistic": 2.4,
-                        "p_value": 0.03,
-                        "eliminated_model": "no_change",
-                    },
-                    {
-                        "included_models": ["ridge", "neural_surface"],
-                        "test_statistic": 1.1,
-                        "p_value": 0.22,
-                        "eliminated_model": None,
-                    },
-                ],
-                "alpha": 0.10,
-                "block_size": 3,
-                "bootstrap_reps": 50,
-            },
+            [
+                {
+                    "loss_metric": "observed_mse_total_variance",
+                    "superior_models": ["ridge", "neural_surface"],
+                    "iterations": [
+                        {
+                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "test_statistic": 2.4,
+                            "p_value": 0.03,
+                            "eliminated_model": "no_change",
+                        },
+                        {
+                            "included_models": ["ridge", "neural_surface"],
+                            "test_statistic": 1.1,
+                            "p_value": 0.22,
+                            "eliminated_model": None,
+                        },
+                    ],
+                    "alpha": 0.10,
+                    "block_size": 3,
+                    "bootstrap_reps": 50,
+                },
+                {
+                    "loss_metric": "observed_qlike_total_variance",
+                    "superior_models": ["ridge", "neural_surface"],
+                    "iterations": [
+                        {
+                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "test_statistic": 2.3,
+                            "p_value": 0.04,
+                            "eliminated_model": "no_change",
+                        },
+                        {
+                            "included_models": ["ridge", "neural_surface"],
+                            "test_statistic": 1.0,
+                            "p_value": 0.24,
+                            "eliminated_model": None,
+                        },
+                    ],
+                    "alpha": 0.10,
+                    "block_size": 3,
+                    "bootstrap_reps": 50,
+                },
+            ],
             option=orjson.OPT_INDENT_2,
         )
     )
@@ -372,7 +445,9 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     stats_config_path = _write_yaml(
         tmp_path / "stats.yaml",
         (
-            'loss_metric: "observed_mse_total_variance"\n'
+            "loss_metrics:\n"
+            '  - "observed_mse_total_variance"\n'
+            '  - "observed_qlike_total_variance"\n'
             'benchmark_model: "no_change"\n'
             'dm_alternative: "greater"\n'
             "dm_max_lag: 0\n"
@@ -389,6 +464,9 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         tmp_path / "report.yaml",
         (
             'benchmark_model: "no_change"\n'
+            "official_loss_metrics:\n"
+            '  - "observed_mse_total_variance"\n'
+            '  - "observed_qlike_total_variance"\n'
             'primary_loss_metric: "observed_mse_total_variance"\n'
             'interpolation_comparison_order: ["moneyness", "maturity"]\n'
             "top_models_per_figure: 3\n"
@@ -417,6 +495,9 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     )
     slice_leaders_csv = (report_dir / "tables" / "slice_leaders.csv").read_text(encoding="utf-8")
     index_md = (report_dir / "index.md").read_text(encoding="utf-8")
+    qlike_ranked_loss_csv = (
+        report_dir / "tables" / "ranked_loss_summary__observed_qlike_total_variance.csv"
+    ).read_text(encoding="utf-8")
 
     assert ranked_loss_csv == (GOLDEN_DIR / "ranked_loss_summary.csv").read_text(encoding="utf-8")
     assert slice_leaders_csv == (GOLDEN_DIR / "slice_leaders.csv").read_text(encoding="utf-8")
@@ -424,6 +505,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     assert "nan" not in ranked_loss_csv.lower()
     assert "nan" not in slice_leaders_csv.lower()
     assert "nan" not in index_md.lower()
+    assert "mean_observed_qlike_total_variance" in qlike_ranked_loss_csv
 
     run_manifest_files = sorted(
         (manifests_dir / "runs" / "09_make_report_artifacts").glob("*.json")

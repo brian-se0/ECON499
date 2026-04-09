@@ -17,6 +17,7 @@ from ivsurf.config import (
 )
 from ivsurf.evaluation.forecast_store import write_forecasts
 from ivsurf.models.base import dataset_to_matrices
+from ivsurf.models.no_change import validate_no_change_feature_layout
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
@@ -117,6 +118,10 @@ def main(
         raw_config.gold_dir / "daily_features.parquet"
     ).sort("quote_date")
     matrices = dataset_to_matrices(feature_frame)
+    validate_no_change_feature_layout(
+        feature_columns=matrices.feature_columns,
+        target_columns=matrices.target_columns,
+    )
     splits = load_splits(split_manifest_path)
 
     ridge_params = load_yaml_config(ridge_config_path)
