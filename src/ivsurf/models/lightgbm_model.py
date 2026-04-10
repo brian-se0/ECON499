@@ -88,9 +88,12 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
             raise ValueError(message)
         predictions = np.column_stack(
             [
-                estimator.predict(
-                    features,
-                    num_iteration=best_iteration,
+                np.asarray(
+                    estimator.booster_.predict(
+                        features,
+                        num_iteration=best_iteration,
+                    ),
+                    dtype=np.float64,
                 )
                 for estimator, best_iteration in zip(
                     self.estimators,

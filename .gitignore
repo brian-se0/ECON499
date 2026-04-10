@@ -39,13 +39,11 @@ AGENTS.md
 mlruns/
 mlartifacts/
 *.log
+.tmp/
 
 # Research pipeline data artifacts
-data/raw/
-data/bronze/
-data/silver/
-data/gold/
-data/manifests/
+data/*
+!data/.gitkeep
 
 # Notebook checkpoints
 .ipynb_checkpoints/

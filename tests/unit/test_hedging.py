@@ -127,3 +127,44 @@ def test_standard_book_labels_match_position_signs() -> None:
             assert instrument.quantity < 0.0
         if instrument.label.endswith("_long"):
             assert instrument.quantity > 0.0
+
+
+def test_zero_vega_hedge_instrument_falls_back_to_delta_only_with_residual_vega() -> None:
+    quote_date = date(2021, 1, 4)
+    target_date = date(2021, 1, 5)
+    predicted_surface = SurfaceInterpolator(
+        maturity_days=np.asarray([30.0, 90.0], dtype=np.float64),
+        moneyness_points=np.asarray([-0.1, 0.0, 0.1], dtype=np.float64),
+        total_variance_grid=np.asarray(
+            [
+                [0.012, 0.0, 0.012],
+                [0.030, 0.024, 0.030],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    book = build_standard_book(
+        trade_date=quote_date,
+        spot=100.0,
+        level_notional=1.0,
+        skew_notional=1.0,
+        calendar_notional=0.5,
+        skew_moneyness_abs=0.1,
+        short_maturity_days=30,
+        long_maturity_days=90,
+    )
+
+    hedge = compute_delta_vega_hedge(
+        book_instruments=book,
+        trade_date=quote_date,
+        trade_spot=100.0,
+        target_date=target_date,
+        predicted_surface=predicted_surface,
+        rate=0.0,
+        hedge_maturity_days=30,
+        hedge_straddle_moneyness=0.0,
+    )
+
+    assert hedge.straddle_quantity == 0.0
+    assert abs(hedge.predicted_net_delta) < 1.0e-8
+    assert hedge.predicted_net_vega > 0.0

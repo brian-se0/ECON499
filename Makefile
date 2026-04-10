@@ -17,7 +17,7 @@ else
 LIMIT_ARG := --limit $(LIMIT)
 endif
 
-.PHONY: help sync sync-dev sync-tracking lint test typecheck check check-runtime official-smoke clean clean-ingest clean-silver clean-surfaces clean-features clean-hpo clean-train clean-stats clean-hedging clean-report ingest silver surfaces features hpo hpo-all hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
+.PHONY: help sync sync-dev sync-tracking lint test typecheck check check-runtime official-smoke clean clean-ingest clean-silver clean-surfaces clean-features clean-hpo clean-train clean-stats clean-hedging clean-report ingest silver surfaces features hpo hpo-all hpo-ridge hpo-elasticnet hpo-har-factor hpo-lightgbm hpo-random-forest hpo-neural-surface hpo-30 hpo-100 tune tune-all train train-30 train-100 walkforward stats hedging report pipeline pipeline-30 pipeline-100 all
 
 help:
 	@Write-Host "Official ECON499 workflow targets:"
@@ -115,19 +115,33 @@ hpo:
 	@if ("$(MODEL)" -eq "") { throw "MODEL is required. Example: make hpo MODEL=ridge" }
 	$(UV) run $(PYTHON) scripts/05_tune_models.py "$(MODEL)" --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
 
-hpo-all:
-	$(MAKE) hpo MODEL=ridge HPO_PROFILE=$(HPO_PROFILE) TRAIN_PROFILE=$(TRAIN_PROFILE)
-	$(MAKE) hpo MODEL=elasticnet HPO_PROFILE=$(HPO_PROFILE) TRAIN_PROFILE=$(TRAIN_PROFILE)
-	$(MAKE) hpo MODEL=har_factor HPO_PROFILE=$(HPO_PROFILE) TRAIN_PROFILE=$(TRAIN_PROFILE)
-	$(MAKE) hpo MODEL=lightgbm HPO_PROFILE=$(HPO_PROFILE) TRAIN_PROFILE=$(TRAIN_PROFILE)
-	$(MAKE) hpo MODEL=random_forest HPO_PROFILE=$(HPO_PROFILE) TRAIN_PROFILE=$(TRAIN_PROFILE)
-	$(MAKE) hpo MODEL=neural_surface HPO_PROFILE=$(HPO_PROFILE) TRAIN_PROFILE=$(TRAIN_PROFILE)
+hpo-ridge:
+	$(UV) run $(PYTHON) scripts/05_tune_models.py "ridge" --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
 
-hpo-30:
-	$(MAKE) hpo-all HPO_PROFILE=hpo_30_trials TRAIN_PROFILE=train_30_epochs
+hpo-elasticnet:
+	$(UV) run $(PYTHON) scripts/05_tune_models.py "elasticnet" --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
 
-hpo-100:
-	$(MAKE) hpo-all HPO_PROFILE=hpo_100_trials TRAIN_PROFILE=train_100_epochs
+hpo-har-factor:
+	$(UV) run $(PYTHON) scripts/05_tune_models.py "har_factor" --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
+
+hpo-lightgbm:
+	$(UV) run $(PYTHON) scripts/05_tune_models.py "lightgbm" --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
+
+hpo-random-forest:
+	$(UV) run $(PYTHON) scripts/05_tune_models.py "random_forest" --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
+
+hpo-neural-surface:
+	$(UV) run $(PYTHON) scripts/05_tune_models.py "neural_surface" --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
+
+hpo-all: hpo-ridge hpo-elasticnet hpo-har-factor hpo-lightgbm hpo-random-forest hpo-neural-surface
+
+hpo-30: HPO_PROFILE = hpo_30_trials
+hpo-30: TRAIN_PROFILE = train_30_epochs
+hpo-30: hpo-all
+
+hpo-100: HPO_PROFILE = hpo_100_trials
+hpo-100: TRAIN_PROFILE = train_100_epochs
+hpo-100: hpo-all
 
 tune: hpo
 
@@ -136,11 +150,13 @@ tune-all: hpo-all
 train:
 	$(UV) run $(PYTHON) scripts/06_run_walkforward.py --hpo-profile-config-path $(HPO_PROFILE_PATH) --training-profile-config-path $(TRAIN_PROFILE_PATH)
 
-train-30:
-	$(MAKE) train HPO_PROFILE=hpo_30_trials TRAIN_PROFILE=train_30_epochs
+train-30: HPO_PROFILE = hpo_30_trials
+train-30: TRAIN_PROFILE = train_30_epochs
+train-30: train
 
-train-100:
-	$(MAKE) train HPO_PROFILE=hpo_100_trials TRAIN_PROFILE=train_100_epochs
+train-100: HPO_PROFILE = hpo_100_trials
+train-100: TRAIN_PROFILE = train_100_epochs
+train-100: train
 
 walkforward: train
 
@@ -155,10 +171,12 @@ report:
 
 pipeline: check check-runtime ingest silver surfaces features hpo-all train stats hedging report
 
-pipeline-30:
-	$(MAKE) pipeline HPO_PROFILE=hpo_30_trials TRAIN_PROFILE=train_30_epochs
+pipeline-30: HPO_PROFILE = hpo_30_trials
+pipeline-30: TRAIN_PROFILE = train_30_epochs
+pipeline-30: pipeline
 
-pipeline-100:
-	$(MAKE) pipeline HPO_PROFILE=hpo_100_trials TRAIN_PROFILE=train_100_epochs
+pipeline-100: HPO_PROFILE = hpo_100_trials
+pipeline-100: TRAIN_PROFILE = train_100_epochs
+pipeline-100: pipeline
 
 all: pipeline

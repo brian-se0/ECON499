@@ -52,6 +52,21 @@ def test_makefile_exposes_official_targets() -> None:
         assert target in makefile
 
 
+def test_profile_alias_targets_do_not_require_recursive_make() -> None:
+    makefile = (_repo_root() / "Makefile").read_text(encoding="utf-8")
+
+    assert (
+        "hpo-all: hpo-ridge hpo-elasticnet hpo-har-factor "
+        "hpo-lightgbm hpo-random-forest hpo-neural-surface"
+    ) in makefile
+    assert "hpo-30: HPO_PROFILE = hpo_30_trials" in makefile
+    assert "hpo-30: TRAIN_PROFILE = train_30_epochs" in makefile
+    assert "train-30: HPO_PROFILE = hpo_30_trials" in makefile
+    assert "train-30: TRAIN_PROFILE = train_30_epochs" in makefile
+    assert "pipeline-30: HPO_PROFILE = hpo_30_trials" in makefile
+    assert "pipeline-30: TRAIN_PROFILE = train_30_epochs" in makefile
+
+
 def test_readme_documents_make_as_official_interface() -> None:
     readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
 

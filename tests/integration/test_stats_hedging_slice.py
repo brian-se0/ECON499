@@ -76,11 +76,21 @@ def test_stats_and_hedging_slice_smoke(tmp_path: Path) -> None:
 
     silver_rows = []
     for quote_date, spot in ((date(2021, 1, 4), 100.0), (date(2021, 1, 5), 101.0)):
-        silver_rows.append(
-            {
-                "quote_date": quote_date,
-                "active_underlying_price_1545": spot,
-            }
+        silver_rows.extend(
+            [
+                {
+                    "quote_date": quote_date,
+                    "underlying_bid_1545": spot - 0.2,
+                    "underlying_ask_1545": spot + 0.2,
+                    "active_underlying_price_1545": spot - 5.0,
+                },
+                {
+                    "quote_date": quote_date,
+                    "underlying_bid_1545": spot - 0.2,
+                    "underlying_ask_1545": spot + 0.2,
+                    "active_underlying_price_1545": spot + 5.0,
+                },
+            ]
         )
     pl.DataFrame(silver_rows).write_parquet(silver_year / "spots.parquet")
 
@@ -88,6 +98,7 @@ def test_stats_and_hedging_slice_smoke(tmp_path: Path) -> None:
     forecasts = load_forecast_frame(forecast_dir)
     spots = load_daily_spot_frame(root / "silver")
     assert spots.height == 2
+    assert spots["spot_1545"].to_list() == [100.0, 101.0]
 
     panel = build_forecast_realization_panel(
         actual_surface_frame=actual,

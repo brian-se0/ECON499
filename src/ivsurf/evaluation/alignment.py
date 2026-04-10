@@ -82,25 +82,35 @@ def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
 
 
 def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
-    """Load one explicit decision-snapshot spot per date from the silver option panel."""
+    """Load one explicit 15:45 underlying midpoint per date from the silver option panel."""
 
     silver_files = sorted(silver_dir.glob("year=*/*.parquet"))
     _require_files(silver_files, "silver")
     lazy_frame = scan_parquet_files(silver_files)
     spot_frame = (
-        lazy_frame.select("quote_date", "active_underlying_price_1545")
+        lazy_frame.select("quote_date", "underlying_bid_1545", "underlying_ask_1545")
         .group_by("quote_date")
         .agg(
-            pl.col("active_underlying_price_1545").n_unique().alias("spot_n_unique"),
-            pl.col("active_underlying_price_1545").first().alias("spot_1545"),
+            pl.col("underlying_bid_1545").n_unique().alias("spot_bid_n_unique"),
+            pl.col("underlying_bid_1545").first().alias("spot_bid_1545"),
+            pl.col("underlying_ask_1545").n_unique().alias("spot_ask_n_unique"),
+            pl.col("underlying_ask_1545").first().alias("spot_ask_1545"),
+        )
+        .with_columns(
+            ((pl.col("spot_bid_1545") + pl.col("spot_ask_1545")) / 2.0).alias("spot_1545")
         )
         .collect(engine="streaming")
         .sort("quote_date")
     )
-    if spot_frame.filter(pl.col("spot_n_unique") != 1).height > 0:
-        message = "Expected exactly one active_underlying_price_1545 per quote_date in silver data."
+    if spot_frame.filter(
+        (pl.col("spot_bid_n_unique") != 1) | (pl.col("spot_ask_n_unique") != 1)
+    ).height > 0:
+        message = (
+            "Expected exactly one underlying_bid_1545 and underlying_ask_1545 "
+            "snapshot per quote_date in silver data."
+        )
         raise ValueError(message)
-    return spot_frame.drop("spot_n_unique")
+    return spot_frame.drop("spot_bid_n_unique", "spot_ask_n_unique")
 
 
 def assert_forecast_origins_after_hpo_boundary(

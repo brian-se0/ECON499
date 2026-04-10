@@ -226,6 +226,7 @@ def main(
             "benchmark_model": "no_change",
             "n_results": results_frame.height,
             "hedge_spot_assumption": "no_change",
+            "spot_source": "underlying_bid_ask_mid_1545",
             "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
             "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
             "workflow_run_label": workflow_paths.run_label,

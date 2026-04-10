@@ -76,18 +76,15 @@ def compute_delta_vega_hedge(
     hedge_delta = predicted_hedge_call.delta + predicted_hedge_put.delta
     hedge_vega = predicted_hedge_call.vega + predicted_hedge_put.vega
     if hedge_vega == 0.0:
-        if predicted_book.total_vega == 0.0:
-            underlying_quantity = -predicted_book.total_delta
-            return HedgePortfolio(
-                underlying_quantity=float(underlying_quantity),
-                straddle_quantity=0.0,
-                hedge_instrument_call=hedge_call,
-                hedge_instrument_put=hedge_put,
-                predicted_net_delta=0.0,
-                predicted_net_vega=0.0,
-            )
-        message = "Predicted hedge straddle vega is zero; cannot size delta-vega hedge."
-        raise ValueError(message)
+        underlying_quantity = -predicted_book.total_delta
+        return HedgePortfolio(
+            underlying_quantity=float(underlying_quantity),
+            straddle_quantity=0.0,
+            hedge_instrument_call=hedge_call,
+            hedge_instrument_put=hedge_put,
+            predicted_net_delta=0.0,
+            predicted_net_vega=float(predicted_book.total_vega),
+        )
 
     straddle_quantity = -predicted_book.total_vega / hedge_vega
     underlying_quantity = -(predicted_book.total_delta + (straddle_quantity * hedge_delta))

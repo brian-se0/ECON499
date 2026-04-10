@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import polars as pl
 import pytest
 
-from ivsurf.evaluation.alignment import build_forecast_realization_panel
+from ivsurf.evaluation.alignment import build_forecast_realization_panel, load_daily_spot_frame
 
 
 def _actual_surface_frame() -> pl.DataFrame:
@@ -55,3 +56,81 @@ def test_build_forecast_realization_panel_rejects_negative_predicted_total_varia
             forecast_frame=pl.DataFrame(forecast_rows),
             total_variance_floor=1.0e-8,
         )
+
+
+def test_load_daily_spot_frame_uses_underlying_midpoint_when_active_price_varies(
+    tmp_path: Path,
+) -> None:
+    silver_dir = tmp_path / "silver" / "year=2020"
+    silver_dir.mkdir(parents=True)
+    pl.DataFrame(
+        [
+            {
+                "quote_date": date(2020, 8, 10),
+                "underlying_bid_1545": 100.0,
+                "underlying_ask_1545": 101.0,
+                "active_underlying_price_1545": 97.0,
+            },
+            {
+                "quote_date": date(2020, 8, 10),
+                "underlying_bid_1545": 100.0,
+                "underlying_ask_1545": 101.0,
+                "active_underlying_price_1545": 94.5,
+            },
+            {
+                "quote_date": date(2020, 8, 11),
+                "underlying_bid_1545": 102.0,
+                "underlying_ask_1545": 103.0,
+                "active_underlying_price_1545": 99.0,
+            },
+            {
+                "quote_date": date(2020, 8, 11),
+                "underlying_bid_1545": 102.0,
+                "underlying_ask_1545": 103.0,
+                "active_underlying_price_1545": 96.5,
+            },
+        ]
+    ).write_parquet(silver_dir / "spots.parquet")
+
+    spots = load_daily_spot_frame(tmp_path / "silver")
+
+    assert spots.to_dicts() == [
+        {
+            "quote_date": date(2020, 8, 10),
+            "spot_bid_1545": 100.0,
+            "spot_ask_1545": 101.0,
+            "spot_1545": 100.5,
+        },
+        {
+            "quote_date": date(2020, 8, 11),
+            "spot_bid_1545": 102.0,
+            "spot_ask_1545": 103.0,
+            "spot_1545": 102.5,
+        },
+    ]
+
+
+def test_load_daily_spot_frame_rejects_multiple_underlying_bid_ask_snapshots_per_date(
+    tmp_path: Path,
+) -> None:
+    silver_dir = tmp_path / "silver" / "year=2020"
+    silver_dir.mkdir(parents=True)
+    pl.DataFrame(
+        [
+            {
+                "quote_date": date(2020, 8, 10),
+                "underlying_bid_1545": 100.0,
+                "underlying_ask_1545": 101.0,
+                "active_underlying_price_1545": 97.0,
+            },
+            {
+                "quote_date": date(2020, 8, 10),
+                "underlying_bid_1545": 100.2,
+                "underlying_ask_1545": 101.2,
+                "active_underlying_price_1545": 97.1,
+            },
+        ]
+    ).write_parquet(silver_dir / "spots.parquet")
+
+    with pytest.raises(ValueError, match="underlying_bid_1545 and underlying_ask_1545"):
+        load_daily_spot_frame(tmp_path / "silver")
