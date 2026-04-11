@@ -105,6 +105,25 @@ def surface_interpolator_from_frame(
     )
 
 
+def require_positive_spot(
+    spot: float,
+    *,
+    context: str,
+    valuation_date: date | None = None,
+) -> float:
+    """Validate that a chosen spot is finite and strictly positive."""
+
+    spot_value = float(spot)
+    if np.isfinite(spot_value) and spot_value > 0.0:
+        return spot_value
+    date_fragment = "" if valuation_date is None else f" on {valuation_date.isoformat()}"
+    message = (
+        f"{context} requires a finite strictly positive spot{date_fragment}; "
+        f"got {spot_value!r}."
+    )
+    raise ValueError(message)
+
+
 def black_scholes_value(
     spot: float,
     strike: float,
@@ -148,13 +167,18 @@ def value_instrument(
 ) -> OptionValuation:
     """Value one carried option under the provided date/spot/surface state."""
 
+    validated_spot = require_positive_spot(
+        spot,
+        context=f"Option valuation for {instrument.label}",
+        valuation_date=valuation_date,
+    )
     elapsed_days = (valuation_date - instrument.trade_date).days
     remaining_days = instrument.initial_maturity_days - elapsed_days
     tau_years = max(remaining_days / 365.0, 0.0)
-    log_moneyness = float(np.log(instrument.strike / spot))
+    log_moneyness = float(np.log(instrument.strike / validated_spot))
     sigma = surface.sigma(max(remaining_days, 1), log_moneyness)
     price, delta, vega = black_scholes_value(
-        spot=spot,
+        spot=validated_spot,
         strike=instrument.strike,
         tau_years=tau_years,
         sigma=sigma,

@@ -49,6 +49,8 @@ def main(
     mlflow_tracking_uri: str | None = None,
     mlflow_experiment_name: str = "ivsurf",
 ) -> None:
+    """Run stage 08 hedging evaluation with active_underlying_price_1545 spot states."""
+
     started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
@@ -98,6 +100,8 @@ def main(
     clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
 
     actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
+    # For SPX/index data the vendor underlying bid/ask fields may be zero, so stage 08 uses
+    # the calc-model 15:45 active underlying price as its single daily spot contract.
     spot_frame = load_daily_spot_frame(raw_config.silver_dir)
     spot_lookup = {
         row["quote_date"]: float(row["spot_1545"]) for row in spot_frame.iter_rows(named=True)
@@ -226,7 +230,7 @@ def main(
             "benchmark_model": "no_change",
             "n_results": results_frame.height,
             "hedge_spot_assumption": "no_change",
-            "spot_source": "underlying_bid_ask_mid_1545",
+            "spot_source": "active_underlying_price_1545",
             "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
             "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
             "workflow_run_label": workflow_paths.run_label,

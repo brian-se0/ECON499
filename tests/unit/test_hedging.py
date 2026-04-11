@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import numpy as np
+import pytest
 
 from ivsurf.hedging.book import build_standard_book
 from ivsurf.hedging.hedge_rules import compute_delta_vega_hedge
@@ -77,6 +78,34 @@ def test_revaluation_error_is_zero_when_forecast_matches_actual_surface() -> Non
         hedge_straddle_moneyness=0.0,
     )
     assert abs(result.revaluation_error) < 1.0e-10
+
+
+def test_evaluate_model_hedging_rejects_nonpositive_target_spot_before_valuation_math() -> None:
+    quote_date = date(2021, 1, 4)
+    target_date = date(2021, 1, 5)
+    surface_t = _flat_surface_interpolator(0.2)
+    surface_t1 = _flat_surface_interpolator(0.22)
+
+    with pytest.raises(ValueError, match=r"target_spot.*2021-01-05.*0\.0"):
+        evaluate_model_hedging(
+            model_name="invalid_spot",
+            quote_date=quote_date,
+            target_date=target_date,
+            trade_spot=100.0,
+            target_spot=0.0,
+            actual_surface_t=surface_t,
+            actual_surface_t1=surface_t1,
+            predicted_surface_t1=surface_t1,
+            rate=0.0,
+            level_notional=1.0,
+            skew_notional=1.0,
+            calendar_notional=0.5,
+            skew_moneyness_abs=0.1,
+            short_maturity_days=30,
+            long_maturity_days=90,
+            hedge_maturity_days=30,
+            hedge_straddle_moneyness=0.0,
+        )
 
 
 def test_zero_vega_surface_uses_delta_only_hedge_when_book_vega_is_already_zero() -> None:

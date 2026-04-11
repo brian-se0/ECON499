@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from datetime import date
 
 from ivsurf.hedging.book import BookInstrument
-from ivsurf.hedging.revaluation import SurfaceInterpolator, value_book, value_instrument
+from ivsurf.hedging.revaluation import (
+    SurfaceInterpolator,
+    require_positive_spot,
+    value_book,
+    value_instrument,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +39,12 @@ def compute_delta_vega_hedge(
 ) -> HedgePortfolio:
     """Size hedges under the explicit no-change spot assumption for next-day sizing."""
 
-    hedge_strike = trade_spot * math.exp(hedge_straddle_moneyness)
+    validated_trade_spot = require_positive_spot(
+        trade_spot,
+        context="Delta-vega hedge sizing trade_spot",
+        valuation_date=trade_date,
+    )
+    hedge_strike = validated_trade_spot * math.exp(hedge_straddle_moneyness)
     hedge_call = BookInstrument(
         label="hedge_call",
         option_type="C",
@@ -55,21 +65,21 @@ def compute_delta_vega_hedge(
     predicted_book = value_book(
         instruments=book_instruments,
         valuation_date=target_date,
-        spot=trade_spot,
+        spot=validated_trade_spot,
         surface=predicted_surface,
         rate=rate,
     )
     predicted_hedge_call = value_instrument(
         instrument=hedge_call,
         valuation_date=target_date,
-        spot=trade_spot,
+        spot=validated_trade_spot,
         surface=predicted_surface,
         rate=rate,
     )
     predicted_hedge_put = value_instrument(
         instrument=hedge_put,
         valuation_date=target_date,
-        spot=trade_spot,
+        spot=validated_trade_spot,
         surface=predicted_surface,
         rate=rate,
     )

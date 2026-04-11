@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator, Sequence
 
 from rich.progress import (
@@ -15,12 +16,31 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+BRAILLE_SPINNER_SAMPLE = "⠋"
+
+
+def _supports_braille_spinner(encoding: str | None) -> bool:
+    """Return whether the active stream encoding can emit Rich's braille spinner glyphs."""
+
+    if encoding is None:
+        return False
+    try:
+        BRAILLE_SPINNER_SAMPLE.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return False
+    return True
+
 
 def create_progress() -> Progress:
     """Create a consistent progress-bar layout for long-running scripts."""
 
+    leading_column = (
+        SpinnerColumn()
+        if _supports_braille_spinner(sys.stdout.encoding)
+        else TextColumn("  ")
+    )
     return Progress(
-        SpinnerColumn(),
+        leading_column,
         TextColumn("[progress.description]{task.description}"),
         BarColumn(bar_width=None),
         TaskProgressColumn(),

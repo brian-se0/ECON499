@@ -44,6 +44,19 @@ def _require_non_negative_float_columns(frame: pl.DataFrame, *, columns: tuple[s
         )
 
 
+def _format_spot_contract_violations(
+    frame: pl.DataFrame,
+    *,
+    columns: tuple[str, ...],
+) -> str:
+    violations: list[str] = []
+    for row in frame.select("quote_date", *columns).iter_rows(named=True):
+        quote_date = cast(date, row["quote_date"])
+        details = ", ".join(f"{column}={row[column]!r}" for column in columns)
+        violations.append(f"{quote_date.isoformat()} ({details})")
+    return "; ".join(violations)
+
+
 def load_actual_surface_frame(gold_dir: Path) -> pl.DataFrame:
     """Load persisted daily surface artifacts."""
 
@@ -82,35 +95,45 @@ def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
 
 
 def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
-    """Load one explicit 15:45 underlying midpoint per date from the silver option panel."""
+    """Load the official stage-08 daily spot from active_underlying_price_1545."""
 
     silver_files = sorted(silver_dir.glob("year=*/*.parquet"))
     _require_files(silver_files, "silver")
     lazy_frame = scan_parquet_files(silver_files)
     spot_frame = (
-        lazy_frame.select("quote_date", "underlying_bid_1545", "underlying_ask_1545")
+        lazy_frame.select("quote_date", "active_underlying_price_1545")
         .group_by("quote_date")
         .agg(
-            pl.col("underlying_bid_1545").n_unique().alias("spot_bid_n_unique"),
-            pl.col("underlying_bid_1545").first().alias("spot_bid_1545"),
-            pl.col("underlying_ask_1545").n_unique().alias("spot_ask_n_unique"),
-            pl.col("underlying_ask_1545").first().alias("spot_ask_1545"),
-        )
-        .with_columns(
-            ((pl.col("spot_bid_1545") + pl.col("spot_ask_1545")) / 2.0).alias("spot_1545")
+            pl.col("active_underlying_price_1545").n_unique().alias("active_spot_n_unique"),
+            pl.col("active_underlying_price_1545").first().alias("spot_1545"),
         )
         .collect(engine="streaming")
         .sort("quote_date")
     )
-    if spot_frame.filter(
-        (pl.col("spot_bid_n_unique") != 1) | (pl.col("spot_ask_n_unique") != 1)
-    ).height > 0:
+    ambiguous_spots = spot_frame.filter(pl.col("active_spot_n_unique") != 1)
+    if ambiguous_spots.height > 0:
+        violations = _format_spot_contract_violations(
+            ambiguous_spots,
+            columns=("active_spot_n_unique", "spot_1545"),
+        )
         message = (
-            "Expected exactly one underlying_bid_1545 and underlying_ask_1545 "
-            "snapshot per quote_date in silver data."
+            "Expected exactly one active_underlying_price_1545 value per quote_date in silver "
+            f"data for the official stage-08 spot contract. Violations: {violations}."
         )
         raise ValueError(message)
-    return spot_frame.drop("spot_bid_n_unique", "spot_ask_n_unique")
+    invalid_spots = spot_frame.filter(
+        pl.col("spot_1545").is_null()
+        | (~pl.col("spot_1545").is_finite())
+        | (pl.col("spot_1545") <= 0.0)
+    )
+    if invalid_spots.height > 0:
+        message = (
+            "Expected strictly positive finite active_underlying_price_1545 values per quote_date "
+            "in silver data for the official stage-08 spot contract. Violations: "
+            f"{_format_spot_contract_violations(invalid_spots, columns=('spot_1545',))}."
+        )
+        raise ValueError(message)
+    return spot_frame.select("quote_date", "spot_1545")
 
 
 def assert_forecast_origins_after_hpo_boundary(

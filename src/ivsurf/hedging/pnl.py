@@ -9,7 +9,12 @@ import polars as pl
 
 from ivsurf.hedging.book import build_standard_book
 from ivsurf.hedging.hedge_rules import compute_delta_vega_hedge
-from ivsurf.hedging.revaluation import SurfaceInterpolator, value_book, value_instrument
+from ivsurf.hedging.revaluation import (
+    SurfaceInterpolator,
+    require_positive_spot,
+    value_book,
+    value_instrument,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +63,19 @@ def evaluate_model_hedging(
 ) -> HedgingEvaluationRow:
     """Evaluate next-day revaluation and hedged PnL for one model/date."""
 
+    validated_trade_spot = require_positive_spot(
+        trade_spot,
+        context="Hedging evaluation trade_spot",
+        valuation_date=quote_date,
+    )
+    validated_target_spot = require_positive_spot(
+        target_spot,
+        context="Hedging evaluation target_spot",
+        valuation_date=target_date,
+    )
     book_instruments = build_standard_book(
         trade_date=quote_date,
-        spot=trade_spot,
+        spot=validated_trade_spot,
         level_notional=level_notional,
         skew_notional=skew_notional,
         calendar_notional=calendar_notional,
@@ -71,21 +86,21 @@ def evaluate_model_hedging(
     book_t0 = value_book(
         instruments=book_instruments,
         valuation_date=quote_date,
-        spot=trade_spot,
+        spot=validated_trade_spot,
         surface=actual_surface_t,
         rate=rate,
     )
     predicted_book_t1 = value_book(
         instruments=book_instruments,
         valuation_date=target_date,
-        spot=target_spot,
+        spot=validated_target_spot,
         surface=predicted_surface_t1,
         rate=rate,
     )
     actual_book_t1 = value_book(
         instruments=book_instruments,
         valuation_date=target_date,
-        spot=target_spot,
+        spot=validated_target_spot,
         surface=actual_surface_t1,
         rate=rate,
     )
@@ -93,7 +108,7 @@ def evaluate_model_hedging(
     hedge = compute_delta_vega_hedge(
         book_instruments=book_instruments,
         trade_date=quote_date,
-        trade_spot=trade_spot,
+        trade_spot=validated_trade_spot,
         target_date=target_date,
         predicted_surface=predicted_surface_t1,
         rate=rate,
@@ -103,28 +118,28 @@ def evaluate_model_hedging(
     hedge_call_t0 = value_instrument(
         instrument=hedge.hedge_instrument_call,
         valuation_date=quote_date,
-        spot=trade_spot,
+        spot=validated_trade_spot,
         surface=actual_surface_t,
         rate=rate,
     )
     hedge_put_t0 = value_instrument(
         instrument=hedge.hedge_instrument_put,
         valuation_date=quote_date,
-        spot=trade_spot,
+        spot=validated_trade_spot,
         surface=actual_surface_t,
         rate=rate,
     )
     hedge_call_t1 = value_instrument(
         instrument=hedge.hedge_instrument_call,
         valuation_date=target_date,
-        spot=target_spot,
+        spot=validated_target_spot,
         surface=actual_surface_t1,
         rate=rate,
     )
     hedge_put_t1 = value_instrument(
         instrument=hedge.hedge_instrument_put,
         valuation_date=target_date,
-        spot=target_spot,
+        spot=validated_target_spot,
         surface=actual_surface_t1,
         rate=rate,
     )
@@ -134,15 +149,17 @@ def evaluate_model_hedging(
     hedge_option_pnl = hedge.straddle_quantity * (
         (hedge_call_t1.price + hedge_put_t1.price) - (hedge_call_t0.price + hedge_put_t0.price)
     )
-    hedge_underlying_pnl = hedge.underlying_quantity * (target_spot - trade_spot)
+    hedge_underlying_pnl = hedge.underlying_quantity * (
+        validated_target_spot - validated_trade_spot
+    )
     hedged_pnl = unhedged_pnl + hedge_option_pnl + hedge_underlying_pnl
 
     return HedgingEvaluationRow(
         model_name=model_name,
         quote_date=quote_date,
         target_date=target_date,
-        spot_t=trade_spot,
-        spot_t1=target_spot,
+        spot_t=validated_trade_spot,
+        spot_t1=validated_target_spot,
         book_value_t0=book_t0.total_value,
         predicted_book_value_t1=predicted_book_t1.total_value,
         actual_book_value_t1=actual_book_t1.total_value,
@@ -175,4 +192,3 @@ def summarize_hedging_results(results: pl.DataFrame) -> pl.DataFrame:
         )
         .sort("mean_abs_revaluation_error")
     )
-

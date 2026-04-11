@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 
 from ivsurf.evaluation.alignment import (
@@ -80,15 +81,15 @@ def test_stats_and_hedging_slice_smoke(tmp_path: Path) -> None:
             [
                 {
                     "quote_date": quote_date,
-                    "underlying_bid_1545": spot - 0.2,
-                    "underlying_ask_1545": spot + 0.2,
-                    "active_underlying_price_1545": spot - 5.0,
+                    "underlying_bid_1545": 0.0,
+                    "underlying_ask_1545": 0.0,
+                    "active_underlying_price_1545": spot,
                 },
                 {
                     "quote_date": quote_date,
-                    "underlying_bid_1545": spot - 0.2,
-                    "underlying_ask_1545": spot + 0.2,
-                    "active_underlying_price_1545": spot + 5.0,
+                    "underlying_bid_1545": 0.0,
+                    "underlying_ask_1545": 0.0,
+                    "active_underlying_price_1545": spot,
                 },
             ]
         )
@@ -154,5 +155,10 @@ def test_stats_and_hedging_slice_smoke(tmp_path: Path) -> None:
                 hedge_straddle_moneyness=0.0,
             )
         )
-    summary = summarize_hedging_results(pl.DataFrame(results))
+    results_frame = pl.DataFrame(results)
+    assert np.isfinite(
+        results_frame.select(pl.exclude("model_name", "quote_date", "target_date")).to_numpy()
+    ).all()
+
+    summary = summarize_hedging_results(results_frame)
     assert summary.height == 2

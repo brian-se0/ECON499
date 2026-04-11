@@ -235,6 +235,7 @@ The pipeline treats the vendor `"1545"` columns as the decision snapshot on ever
 
 - `SPX` is treated as AM-settled by default.
 - `SPXW` and other roots are treated as PM-settled unless explicitly configured otherwise.
+- Stage `08` hedging uses `active_underlying_price_1545` as the single official daily spot source. The vendor `underlying_bid_1545` and `underlying_ask_1545` fields are not used for SPX/index hedging because they may legitimately be zero.
 
 Feature/target pairs are aligned to the next observed trading session. This means pre-early-close features target the early-close session itself rather than skipping to the next regular close.
 
