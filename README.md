@@ -27,8 +27,9 @@ The thesis universe is the SPX underlying universe defined by `underlying_symbol
 - The `scripts/*.py` files are internal stage entrypoints invoked by the `Makefile`.
 - Direct script invocation is not the documented workflow for this project.
 - HPO is a required stage before walk-forward training. The official `pipeline` targets always run stage `05` before stage `06`.
+- Use `make sync-dev` for the official `pipeline` targets because `make pipeline`, `make pipeline-30`, and `make pipeline-100` all run `make check`, which requires the dev toolchain.
 - Before the first expensive raw-data run, the required operator flow is `make check-runtime`, then `make official-smoke`, then `make pipeline`.
-- The official `pipeline` target still runs `make check-runtime` first so the Windows/GPU/CUDA contract fails fast before any raw-data work starts.
+- The official `pipeline` target runs `make check` and then `make check-runtime` before any raw-data work starts, so code-quality and Windows/GPU/CUDA contract failures surface before the raw-data stages.
 
 ## Requirements
 
@@ -55,6 +56,8 @@ Install runtime plus development tooling:
 ```powershell
 make sync-dev
 ```
+
+Use `make sync-dev` for the official end-to-end workflow. The `pipeline` targets invoke `make check`, which runs `ruff`, `pytest`, and `mypy`.
 
 Install runtime, development tooling, and MLflow support:
 

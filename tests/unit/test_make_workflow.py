@@ -78,6 +78,11 @@ def test_readme_documents_make_as_official_interface() -> None:
     assert "make train-100" in readme
     assert "make clean" in readme
     assert "make clean-train" in readme
+    assert "Use `make sync-dev` for the official `pipeline` targets" in readme
+    assert (
+        "The official `pipeline` target runs `make check` and then "
+        "`make check-runtime`" in readme
+    )
     assert "never deletes or mutates the protected raw options directory" in readme
     assert "Direct script invocation is not the documented workflow" in readme
     assert "uv run python scripts/01_ingest_cboe.py" not in readme
