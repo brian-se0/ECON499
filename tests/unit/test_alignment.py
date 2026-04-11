@@ -70,24 +70,28 @@ def test_load_daily_spot_frame_uses_active_underlying_price_when_bid_ask_are_zer
                 "underlying_bid_1545": 0.0,
                 "underlying_ask_1545": 0.0,
                 "active_underlying_price_1545": 97.0,
+                "is_valid_observation": True,
             },
             {
                 "quote_date": date(2020, 8, 10),
                 "underlying_bid_1545": 0.0,
                 "underlying_ask_1545": 0.0,
                 "active_underlying_price_1545": 97.0,
+                "is_valid_observation": True,
             },
             {
                 "quote_date": date(2020, 8, 11),
                 "underlying_bid_1545": 0.0,
                 "underlying_ask_1545": 0.0,
                 "active_underlying_price_1545": 99.0,
+                "is_valid_observation": True,
             },
             {
                 "quote_date": date(2020, 8, 11),
                 "underlying_bid_1545": 0.0,
                 "underlying_ask_1545": 0.0,
                 "active_underlying_price_1545": 99.0,
+                "is_valid_observation": True,
             },
         ]
     ).write_parquet(silver_dir / "spots.parquet")
@@ -106,7 +110,7 @@ def test_load_daily_spot_frame_uses_active_underlying_price_when_bid_ask_are_zer
     ]
 
 
-def test_load_daily_spot_frame_rejects_multiple_active_underlying_price_values_per_date(
+def test_load_daily_spot_frame_uses_valid_row_median_when_spot_varies_across_option_rows(
     tmp_path: Path,
 ) -> None:
     silver_dir = tmp_path / "silver" / "year=2020"
@@ -118,18 +122,40 @@ def test_load_daily_spot_frame_rejects_multiple_active_underlying_price_values_p
                 "underlying_bid_1545": 0.0,
                 "underlying_ask_1545": 0.0,
                 "active_underlying_price_1545": 97.0,
+                "is_valid_observation": True,
             },
             {
                 "quote_date": date(2020, 8, 10),
                 "underlying_bid_1545": 0.0,
                 "underlying_ask_1545": 0.0,
                 "active_underlying_price_1545": 97.1,
+                "is_valid_observation": True,
+            },
+            {
+                "quote_date": date(2020, 8, 10),
+                "underlying_bid_1545": 0.0,
+                "underlying_ask_1545": 0.0,
+                "active_underlying_price_1545": 97.2,
+                "is_valid_observation": True,
+            },
+            {
+                "quote_date": date(2020, 8, 10),
+                "underlying_bid_1545": 0.0,
+                "underlying_ask_1545": 0.0,
+                "active_underlying_price_1545": 140.0,
+                "is_valid_observation": False,
             },
         ]
     ).write_parquet(silver_dir / "spots.parquet")
 
-    with pytest.raises(ValueError, match="active_underlying_price_1545"):
-        load_daily_spot_frame(tmp_path / "silver")
+    spots = load_daily_spot_frame(tmp_path / "silver")
+
+    assert spots.to_dicts() == [
+        {
+            "quote_date": date(2020, 8, 10),
+            "spot_1545": 97.1,
+        }
+    ]
 
 
 def test_load_daily_spot_frame_rejects_nonpositive_active_underlying_price(tmp_path: Path) -> None:
@@ -142,9 +168,13 @@ def test_load_daily_spot_frame_rejects_nonpositive_active_underlying_price(tmp_p
                 "underlying_bid_1545": 0.0,
                 "underlying_ask_1545": 0.0,
                 "active_underlying_price_1545": 0.0,
+                "is_valid_observation": True,
             }
         ]
     ).write_parquet(silver_dir / "spots.parquet")
 
-    with pytest.raises(ValueError, match="strictly positive finite active_underlying_price_1545"):
+    with pytest.raises(
+        ValueError,
+        match="strictly positive finite stage-08 daily spot values derived from the median",
+    ):
         load_daily_spot_frame(tmp_path / "silver")

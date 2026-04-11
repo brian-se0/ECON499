@@ -95,41 +95,41 @@ def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
 
 
 def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
-    """Load the official stage-08 daily spot from active_underlying_price_1545."""
+    """Load the official stage-08 daily spot from valid active_underlying_price_1545 rows."""
 
     silver_files = sorted(silver_dir.glob("year=*/*.parquet"))
     _require_files(silver_files, "silver")
     lazy_frame = scan_parquet_files(silver_files)
     spot_frame = (
-        lazy_frame.select("quote_date", "active_underlying_price_1545")
+        lazy_frame.select("quote_date", "active_underlying_price_1545", "is_valid_observation")
+        .filter(pl.col("is_valid_observation"))
         .group_by("quote_date")
         .agg(
+            pl.len().alias("valid_spot_row_count"),
             pl.col("active_underlying_price_1545").n_unique().alias("active_spot_n_unique"),
-            pl.col("active_underlying_price_1545").first().alias("spot_1545"),
+            pl.col("active_underlying_price_1545").median().alias("spot_1545"),
+            pl.col("active_underlying_price_1545").min().alias("active_spot_min"),
+            pl.col("active_underlying_price_1545").max().alias("active_spot_max"),
         )
         .collect(engine="streaming")
         .sort("quote_date")
     )
-    ambiguous_spots = spot_frame.filter(pl.col("active_spot_n_unique") != 1)
-    if ambiguous_spots.height > 0:
-        violations = _format_spot_contract_violations(
-            ambiguous_spots,
-            columns=("active_spot_n_unique", "spot_1545"),
-        )
-        message = (
-            "Expected exactly one active_underlying_price_1545 value per quote_date in silver "
-            f"data for the official stage-08 spot contract. Violations: {violations}."
-        )
+    if spot_frame.height == 0:
+        message = "No valid silver rows available to derive stage-08 daily spot states."
         raise ValueError(message)
-    invalid_spots = spot_frame.filter(
-        pl.col("spot_1545").is_null()
-        | (~pl.col("spot_1545").is_finite())
-        | (pl.col("spot_1545") <= 0.0)
-    )
+    invalid_spot_frames = [
+        spot_frame.filter(pl.col("valid_spot_row_count") <= 0),
+        spot_frame.filter(
+            pl.col("spot_1545").is_null()
+            | (~pl.col("spot_1545").is_finite())
+            | (pl.col("spot_1545") <= 0.0)
+        ),
+    ]
+    invalid_spots = pl.concat(invalid_spot_frames).unique(subset=["quote_date"]).sort("quote_date")
     if invalid_spots.height > 0:
         message = (
-            "Expected strictly positive finite active_underlying_price_1545 values per quote_date "
-            "in silver data for the official stage-08 spot contract. Violations: "
+            "Expected strictly positive finite stage-08 daily spot values derived from the "
+            "median active_underlying_price_1545 across valid silver rows. Violations: "
             f"{_format_spot_contract_violations(invalid_spots, columns=('spot_1545',))}."
         )
         raise ValueError(message)

@@ -84,12 +84,14 @@ def test_stats_and_hedging_slice_smoke(tmp_path: Path) -> None:
                     "underlying_bid_1545": 0.0,
                     "underlying_ask_1545": 0.0,
                     "active_underlying_price_1545": spot,
+                    "is_valid_observation": True,
                 },
                 {
                     "quote_date": quote_date,
                     "underlying_bid_1545": 0.0,
                     "underlying_ask_1545": 0.0,
                     "active_underlying_price_1545": spot,
+                    "is_valid_observation": True,
                 },
             ]
         )
