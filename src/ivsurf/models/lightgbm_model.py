@@ -2,23 +2,38 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 from lightgbm import LGBMRegressor, early_stopping, log_evaluation
 
 from ivsurf.config import TrainingProfileConfig
+from ivsurf.features.factors import SurfacePCAFactors
 from ivsurf.models.base import SurfaceForecastModel
 from ivsurf.models.positive_target import LogPositiveTargetAdapter
 
 
 class LightGBMSurfaceModel(SurfaceForecastModel):
-    """Multi-output LightGBM regression."""
+    """Factor-space LightGBM regression on log total variance."""
 
     def __init__(self, **params: Any) -> None:
         self.params = dict(params)
+        raw_n_factors = self.params.pop("n_factors", 4)
+        if not isinstance(raw_n_factors, int | float | str):
+            message = (
+                "LightGBM n_factors must be integer-like, found "
+                f"{type(raw_n_factors).__name__}."
+            )
+            raise TypeError(message)
+        self.n_factors = int(raw_n_factors)
+        if self.n_factors <= 0:
+            message = f"LightGBM n_factors must be positive, found {self.n_factors}."
+            raise ValueError(message)
         self.estimators: list[LGBMRegressor] = []
         self.best_iterations: tuple[int, ...] = ()
+        self.factorizer: SurfacePCAFactors | None = None
+        self.inner_fit_count: int = 0
         self.target_adapter = LogPositiveTargetAdapter("LightGBMSurfaceModel")
 
     def fit(
@@ -32,6 +47,7 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
         validation_features: np.ndarray | None = None,
         validation_targets: np.ndarray | None = None,
         training_profile: TrainingProfileConfig | None = None,
+        on_factor_complete: Callable[[int, int], None] | None = None,
     ) -> LightGBMSurfaceModel:
         estimators: list[LGBMRegressor] = []
         best_iterations: list[int] = []
@@ -39,15 +55,28 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
             targets,
             array_name="training targets",
         )
+        max_factor_count = min(transformed_targets.shape[0], transformed_targets.shape[1])
+        if self.n_factors > max_factor_count:
+            message = (
+                "LightGBMSurfaceModel n_factors exceeds the admissible PCA rank for the "
+                f"training window ({self.n_factors} > {max_factor_count})."
+            )
+            raise ValueError(message)
+
+        factorizer = SurfacePCAFactors(n_components=self.n_factors).fit(transformed_targets)
+        target_factors = factorizer.transform(transformed_targets)
         transformed_validation_targets = (
             None
             if validation_targets is None
-            else self.target_adapter.transform_targets(
-                validation_targets,
-                array_name="validation targets",
+            else factorizer.transform(
+                self.target_adapter.transform_targets(
+                    validation_targets,
+                    array_name="validation targets",
+                )
             )
         )
-        for target_index in range(targets.shape[1]):
+
+        for factor_index in range(self.n_factors):
             estimator = LGBMRegressor(**self.params)
             fit_kwargs: dict[str, Any] = {}
             if (
@@ -57,7 +86,7 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
             ):
                 fit_kwargs["callbacks"] = [log_evaluation(period=0)]
                 fit_kwargs["eval_set"] = [
-                    (validation_features, transformed_validation_targets[:, target_index]),
+                    (validation_features, transformed_validation_targets[:, factor_index]),
                 ]
                 fit_kwargs["eval_metric"] = "l2"
                 fit_kwargs["callbacks"].append(
@@ -68,7 +97,7 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
                         verbose=False,
                     )
                 )
-            estimator.fit(features, transformed_targets[:, target_index], **fit_kwargs)
+            estimator.fit(features, target_factors[:, factor_index], **fit_kwargs)
             estimators.append(estimator)
             best_iteration = estimator.best_iteration_
             if best_iteration is None:
@@ -78,15 +107,20 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
                     raise TypeError(message)
                 best_iteration = n_estimators
             best_iterations.append(int(best_iteration))
+            if on_factor_complete is not None:
+                on_factor_complete(factor_index + 1, self.n_factors)
+
         self.estimators = estimators
         self.best_iterations = tuple(best_iterations)
+        self.factorizer = factorizer
+        self.inner_fit_count = len(estimators)
         return self
 
     def predict(self, features: np.ndarray) -> np.ndarray:
-        if not self.estimators:
+        if not self.estimators or self.factorizer is None:
             message = "LightGBMSurfaceModel must be fit before predict."
             raise ValueError(message)
-        predictions = np.column_stack(
+        factor_predictions = np.column_stack(
             [
                 np.asarray(
                     estimator.booster_.predict(
@@ -102,4 +136,5 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
                 )
             ]
         )
-        return self.target_adapter.inverse_predictions(predictions)
+        reconstructed_log_targets = self.factorizer.inverse_transform(factor_predictions)
+        return self.target_adapter.inverse_predictions(reconstructed_log_targets)

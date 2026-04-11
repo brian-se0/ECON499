@@ -152,6 +152,13 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
             "observed_cell_min_count: 1\n"
         ),
     )
+    metrics_config_path = _write_text(
+        tmp_path / "configs" / "eval" / "metrics.yaml",
+        (
+            "positive_floor: 1.0e-8\n"
+            'primary_loss_metric: "observed_mse_total_variance"\n'
+        ),
+    )
     hpo_profile_config_path = _write_text(
         tmp_path / "configs" / "workflow" / "hpo_test.yaml",
         (
@@ -194,6 +201,7 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
         model_name="ridge",
         raw_config_path=raw_config_path,
         surface_config_path=surface_config_path,
+        metrics_config_path=metrics_config_path,
         lightgbm_config_path=repo_root / "configs" / "models" / "lightgbm.yaml",
         neural_config_path=repo_root / "configs" / "models" / "neural_surface.yaml",
         hpo_profile_config_path=hpo_profile_config_path,
@@ -207,6 +215,7 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
     stage06.main(
         raw_config_path=raw_config_path,
         surface_config_path=surface_config_path,
+        metrics_config_path=metrics_config_path,
         ridge_config_path=repo_root / "configs" / "models" / "ridge.yaml",
         elasticnet_config_path=repo_root / "configs" / "models" / "elasticnet.yaml",
         har_config_path=repo_root / "configs" / "models" / "har_factor.yaml",
@@ -289,6 +298,13 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
             "observed_cell_min_count: 1\n"
         ),
     )
+    metrics_config_path = _write_text(
+        tmp_path / "configs" / "eval" / "metrics.yaml",
+        (
+            "positive_floor: 1.0e-8\n"
+            'primary_loss_metric: "observed_mse_total_variance"\n'
+        ),
+    )
     hpo_profile_config_path = _write_text(
         tmp_path / "configs" / "workflow" / "hpo_gap_test.yaml",
         (
@@ -331,6 +347,7 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
         model_name="ridge",
         raw_config_path=raw_config_path,
         surface_config_path=surface_config_path,
+        metrics_config_path=metrics_config_path,
         lightgbm_config_path=repo_root / "configs" / "models" / "lightgbm.yaml",
         neural_config_path=repo_root / "configs" / "models" / "neural_surface.yaml",
         hpo_profile_config_path=hpo_profile_config_path,
@@ -339,6 +356,7 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
     stage06.main(
         raw_config_path=raw_config_path,
         surface_config_path=surface_config_path,
+        metrics_config_path=metrics_config_path,
         ridge_config_path=repo_root / "configs" / "models" / "ridge.yaml",
         elasticnet_config_path=repo_root / "configs" / "models" / "elasticnet.yaml",
         har_config_path=repo_root / "configs" / "models" / "har_factor.yaml",

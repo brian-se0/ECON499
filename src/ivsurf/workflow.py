@@ -20,6 +20,12 @@ def tuning_manifest_path(manifests_dir: Path, hpo_profile_name: str, model_name:
     return manifests_dir / "tuning" / hpo_profile_name / f"{model_name}.json"
 
 
+def tuning_diagnostics_path(manifests_dir: Path, hpo_profile_name: str, model_name: str) -> Path:
+    """Return the profile-specific tuning diagnostics parquet path for one model."""
+
+    return manifests_dir / "tuning" / hpo_profile_name / f"{model_name}__diagnostics.parquet"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkflowRunPaths:
     """Filesystem paths for one HPO/training profile combination."""

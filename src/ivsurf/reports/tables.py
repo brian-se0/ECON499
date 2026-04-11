@@ -53,6 +53,122 @@ def build_ranked_loss_table(
     )
 
 
+def build_tail_risk_table(
+    daily_loss_frame: pl.DataFrame,
+    *,
+    benchmark_model: str,
+    metric_column: str,
+) -> pl.DataFrame:
+    """Summarize tail-risk behaviour for one daily loss metric."""
+
+    if metric_column not in daily_loss_frame.columns:
+        message = f"Daily loss frame does not contain required metric column {metric_column}."
+        raise ValueError(message)
+    summary = (
+        daily_loss_frame.group_by("model_name")
+        .agg(
+            pl.col(metric_column).mean().alias("mean_loss"),
+            pl.col(metric_column).quantile(0.90).alias("p90_loss"),
+            pl.col(metric_column).quantile(0.95).alias("p95_loss"),
+            pl.col(metric_column).quantile(0.99).alias("p99_loss"),
+            pl.col(metric_column).max().alias("max_loss"),
+            pl.len().alias("n_target_dates"),
+        )
+        .sort(["p95_loss", "max_loss", "mean_loss"])
+    )
+    if benchmark_model not in summary["model_name"].to_list():
+        message = f"Benchmark model {benchmark_model} not found in daily loss frame."
+        raise ValueError(message)
+    benchmark_row = summary.filter(pl.col("model_name") == benchmark_model).row(0, named=True)
+    benchmark_p95 = float(benchmark_row["p95_loss"])
+    benchmark_max = float(benchmark_row["max_loss"])
+    return summary.with_columns(
+        pl.lit(metric_column).alias("loss_metric"),
+        (
+            ((pl.lit(benchmark_p95) - pl.col("p95_loss")) / pl.lit(benchmark_p95)) * 100.0
+        ).alias("p95_improvement_vs_benchmark_pct"),
+        (
+            ((pl.lit(benchmark_max) - pl.col("max_loss")) / pl.lit(benchmark_max)) * 100.0
+        ).alias("max_improvement_vs_benchmark_pct"),
+    ).select(
+        "loss_metric",
+        "model_name",
+        "mean_loss",
+        "p90_loss",
+        "p95_loss",
+        "p99_loss",
+        "max_loss",
+        "p95_improvement_vs_benchmark_pct",
+        "max_improvement_vs_benchmark_pct",
+        "n_target_dates",
+    )
+
+
+def build_worst_day_drilldown_table(
+    daily_loss_frame: pl.DataFrame,
+    *,
+    benchmark_model: str,
+    metric_column: str,
+    top_n_per_model: int = 5,
+) -> pl.DataFrame:
+    """Return the worst target days for each model under one daily loss metric."""
+
+    if metric_column not in daily_loss_frame.columns:
+        message = f"Daily loss frame does not contain required metric column {metric_column}."
+        raise ValueError(message)
+    losses = daily_loss_frame.select(
+        "model_name",
+        "quote_date",
+        "target_date",
+        pl.col(metric_column).alias("loss_value"),
+    )
+    benchmark_losses = losses.filter(pl.col("model_name") == benchmark_model).select(
+        "quote_date",
+        "target_date",
+        pl.col("loss_value").alias("benchmark_loss_value"),
+    )
+    if benchmark_losses.is_empty():
+        message = f"Benchmark model {benchmark_model} not found in daily loss frame."
+        raise ValueError(message)
+    return (
+        losses.join(
+            benchmark_losses,
+            on=["quote_date", "target_date"],
+            how="left",
+            validate="m:1",
+        )
+        .with_columns(
+            pl.lit(metric_column).alias("loss_metric"),
+            pl.lit(benchmark_model).alias("benchmark_model"),
+            (pl.col("loss_value") - pl.col("benchmark_loss_value")).alias(
+                "excess_loss_vs_benchmark"
+            ),
+            pl.when(pl.col("benchmark_loss_value") > 0.0)
+            .then(pl.col("loss_value") / pl.col("benchmark_loss_value"))
+            .otherwise(None)
+            .alias("loss_ratio_vs_benchmark"),
+            pl.col("loss_value")
+            .rank(method="ordinal", descending=True)
+            .over("model_name")
+            .alias("rank_within_model"),
+        )
+        .filter(pl.col("rank_within_model") <= top_n_per_model)
+        .sort(["model_name", "rank_within_model"])
+        .select(
+            "loss_metric",
+            "model_name",
+            "rank_within_model",
+            "quote_date",
+            "target_date",
+            "loss_value",
+            "benchmark_model",
+            "benchmark_loss_value",
+            "excess_loss_vs_benchmark",
+            "loss_ratio_vs_benchmark",
+        )
+    )
+
+
 def build_ranked_hedging_table(
     hedging_summary: pl.DataFrame,
     *,
@@ -234,6 +350,8 @@ def build_report_overview_markdown(
     best_loss_by_metric_rows: Sequence[Mapping[str, Any]],
     summary_metric_column: str,
     ranked_loss_table: pl.DataFrame,
+    tail_risk_table: pl.DataFrame,
+    worst_day_drilldown: pl.DataFrame,
     ranked_hedging_table: pl.DataFrame,
     mcs_table: pl.DataFrame,
     slice_leader_table: pl.DataFrame,
@@ -242,6 +360,7 @@ def build_report_overview_markdown(
     """Create a concise report index for the generated artifacts."""
 
     best_loss = ranked_loss_table.row(0, named=True)
+    tail_risk_leader = tail_risk_table.row(0, named=True)
     best_hedging = ranked_hedging_table.row(0, named=True)
     included_models = ", ".join(
         mcs_table.filter(pl.col("included_in_simplified_tmax_set"))["model_name"].to_list()
@@ -259,6 +378,10 @@ def build_report_overview_markdown(
         (
             f"- Best full-sample loss model: `{best_loss['model_name']}` "
             f"({best_loss[summary_metric_column]:.6f})"
+        ),
+        (
+            f"- Best primary tail-risk model by 95th percentile: "
+            f"`{tail_risk_leader['model_name']}` ({tail_risk_leader['p95_loss']:.6f})"
         ),
         (
             f"- Best hedging revaluation model: `{best_hedging['model_name']}` "
@@ -285,6 +408,14 @@ def build_report_overview_markdown(
             "## Strongest Slice Gains",
             "",
             frame_to_markdown(best_slice_gains),
+            "",
+            "## Tail Risk",
+            "",
+            frame_to_markdown(tail_risk_table.head(5)),
+            "",
+            "## Worst Primary-Loss Days",
+            "",
+            frame_to_markdown(worst_day_drilldown.head(10)),
         ]
     )
     return "\n".join(lines) + "\n"

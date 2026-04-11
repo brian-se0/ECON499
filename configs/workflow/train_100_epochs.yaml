@@ -2,6 +2,7 @@ profile_name: "train_100_epochs"
 epochs: 100
 neural_early_stopping_patience: 10
 neural_early_stopping_min_delta: 1.0e-6
+neural_min_epochs_before_early_stop: 20
 lightgbm_early_stopping_rounds: 50
 lightgbm_early_stopping_min_delta: 0.0
 lightgbm_first_metric_only: true

@@ -1,2 +1,2 @@
 positive_floor: 1.0e-8
-
+primary_loss_metric: "observed_mse_total_variance"

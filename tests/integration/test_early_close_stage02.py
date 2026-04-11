@@ -99,3 +99,11 @@ def test_stage02_keeps_early_close_sessions_in_the_supervised_path(tmp_path: Pat
     assert float(silver_output["tau_years"][0]) > 0.0
     assert summary[0]["status"] == "built"
     assert summary[0]["valid_rows"] == 1
+    run_manifest_path = sorted(
+        (manifests_dir / "runs" / "02_build_option_panel").glob("*.json")
+    )[-1]
+    run_manifest_payload = orjson.loads(run_manifest_path.read_bytes())
+    output_artifact_paths = {
+        artifact["path"] for artifact in run_manifest_payload["output_artifacts"]
+    }
+    assert str((silver_dir / "year=2019" / "2019-11-29.parquet").resolve()) in output_artifact_paths

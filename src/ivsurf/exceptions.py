@@ -24,3 +24,10 @@ class JoinCardinalityError(IvsurfError):
 class InterpolationError(IvsurfError):
     """Raised when surface completion cannot deterministically finish."""
 
+
+class ModelTrainingError(IvsurfError):
+    """Raised when model fitting fails under explicit training rules."""
+
+
+class ModelConvergenceError(ModelTrainingError):
+    """Raised when an optimizer emits an explicit convergence failure."""

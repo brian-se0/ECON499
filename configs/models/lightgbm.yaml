@@ -1,4 +1,5 @@
 model_name: "lightgbm"
+n_factors: 6
 device_type: "gpu"
 n_estimators: 300
 learning_rate: 0.05

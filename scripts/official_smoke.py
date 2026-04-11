@@ -243,6 +243,7 @@ def run_official_smoke(
             model_name=model_name,
             raw_config_path=raw_config_path,
             surface_config_path=smoke_surface_config_path,
+            metrics_config_path=metrics_config_path,
             lightgbm_config_path=lightgbm_config_path,
             neural_config_path=neural_config_path,
             hpo_profile_config_path=smoke_hpo_profile_path,
@@ -251,6 +252,7 @@ def run_official_smoke(
     stage06.main(
         raw_config_path=raw_config_path,
         surface_config_path=smoke_surface_config_path,
+        metrics_config_path=metrics_config_path,
         ridge_config_path=ridge_config_path,
         elasticnet_config_path=elasticnet_config_path,
         har_config_path=har_config_path,

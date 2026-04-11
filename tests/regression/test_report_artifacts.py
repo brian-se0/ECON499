@@ -445,7 +445,13 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             "observed_cell_min_count: 1\n"
         ),
     )
-    metrics_config_path = _write_yaml(tmp_path / "metrics.yaml", "positive_floor: 1.0e-8\n")
+    metrics_config_path = _write_yaml(
+        tmp_path / "metrics.yaml",
+        (
+            "positive_floor: 1.0e-8\n"
+            'primary_loss_metric: "observed_mse_total_variance"\n'
+        ),
+    )
     stats_config_path = _write_yaml(
         tmp_path / "stats.yaml",
         (
@@ -502,6 +508,8 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     qlike_ranked_loss_csv = (
         report_dir / "tables" / "ranked_loss_summary__observed_qlike_total_variance.csv"
     ).read_text(encoding="utf-8")
+    tail_risk_csv = (report_dir / "tables" / "tail_risk_summary.csv").read_text(encoding="utf-8")
+    worst_day_csv = (report_dir / "tables" / "worst_day_drilldown.csv").read_text(encoding="utf-8")
 
     assert ranked_loss_csv == (GOLDEN_DIR / "ranked_loss_summary.csv").read_text(encoding="utf-8")
     assert slice_leaders_csv == (GOLDEN_DIR / "slice_leaders.csv").read_text(encoding="utf-8")
@@ -510,6 +518,8 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     assert "nan" not in slice_leaders_csv.lower()
     assert "nan" not in index_md.lower()
     assert "mean_observed_qlike_total_variance" in qlike_ranked_loss_csv
+    assert "p95_loss" in tail_risk_csv
+    assert "loss_ratio_vs_benchmark" in worst_day_csv
 
     run_manifest_files = sorted(
         (manifests_dir / "runs" / "09_make_report_artifacts").glob("*.json")

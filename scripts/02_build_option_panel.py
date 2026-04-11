@@ -123,6 +123,7 @@ def main(
     summary_path = raw_config.manifests_dir / "silver_build_summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     write_bytes_atomic(summary_path, orjson.dumps(summary_rows, option=orjson.OPT_INDENT_2))
+    silver_output_paths = [Path(str(row["silver_path"])) for row in summary_rows]
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
         repo_root=Path.cwd(),
@@ -133,7 +134,7 @@ def main(
             raw_config.manifests_dir / "bronze_ingestion_summary.json",
             *bronze_files,
         ],
-        output_artifact_paths=[summary_path],
+        output_artifact_paths=[summary_path, *silver_output_paths],
         data_manifest_paths=bronze_files,
         extra_metadata={
             "limit": limit,

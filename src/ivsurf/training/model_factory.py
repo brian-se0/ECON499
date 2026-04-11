@@ -42,6 +42,18 @@ def _int_param(params: Mapping[str, object], key: str) -> int:
     return int(value)
 
 
+def _bool_param(params: Mapping[str, object], key: str) -> bool:
+    value = params[key]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+    message = f"Expected {key} to be boolean-like, found {type(value).__name__}."
+    raise TypeError(message)
+
+
 def suggest_model_from_trial(
     *,
     model_name: str,
@@ -54,12 +66,16 @@ def suggest_model_from_trial(
     """Construct a tunable model by sampling a documented Optuna search space."""
 
     if model_name == "ridge":
-        return RidgeSurfaceModel(alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True))
+        return RidgeSurfaceModel(
+            alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True),
+            clip_predictions_to_train_log_range=True,
+        )
     if model_name == "elasticnet":
         return ElasticNetSurfaceModel(
-            alpha=trial.suggest_float("alpha", 1.0e-4, 10.0, log=True),
+            alpha=trial.suggest_float("alpha", 1.0e-2, 10.0, log=True),
             l1_ratio=trial.suggest_float("l1_ratio", 0.01, 0.95),
-            max_iter=10_000,
+            max_iter=50_000,
+            tol=1.0e-4,
         )
     if model_name == "har_factor":
         return HarFactorSurfaceModel(
@@ -80,6 +96,7 @@ def suggest_model_from_trial(
                 "min_child_samples": trial.suggest_int("min_child_samples", 10, 60, step=5),
                 "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
                 "lambda_l2": trial.suggest_float("lambda_l2", 1.0e-4, 10.0, log=True),
+                "n_factors": trial.suggest_int("n_factors", 2, min(12, target_dim)),
             }
         )
         params.setdefault("device_type", "gpu")
@@ -106,10 +123,10 @@ def suggest_model_from_trial(
                 "weight_decay": trial.suggest_float("weight_decay", 1.0e-6, 1.0e-2, log=True),
                 "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "calendar_penalty_weight": trial.suggest_float(
-                    "calendar_penalty_weight", 1.0e-4, 0.5, log=True
+                    "calendar_penalty_weight", 1.0e-5, 5.0e-2, log=True
                 ),
                 "convexity_penalty_weight": trial.suggest_float(
-                    "convexity_penalty_weight", 1.0e-4, 0.5, log=True
+                    "convexity_penalty_weight", 1.0e-5, 5.0e-2, log=True
                 ),
                 "roughness_penalty_weight": trial.suggest_float(
                     "roughness_penalty_weight", 1.0e-5, 0.05, log=True
@@ -134,12 +151,19 @@ def make_model_from_params(
     if model_name == "no_change":
         return NoChangeSurfaceModel()
     if model_name == "ridge":
-        return RidgeSurfaceModel(alpha=_float_param(params, "alpha"))
+        return RidgeSurfaceModel(
+            alpha=_float_param(params, "alpha"),
+            clip_predictions_to_train_log_range=_bool_param(
+                params,
+                "clip_predictions_to_train_log_range",
+            ),
+        )
     if model_name == "elasticnet":
         return ElasticNetSurfaceModel(
             alpha=_float_param(params, "alpha"),
             l1_ratio=_float_param(params, "l1_ratio"),
             max_iter=_int_param(params, "max_iter"),
+            tol=_float_param(params, "tol"),
         )
     if model_name == "har_factor":
         return HarFactorSurfaceModel(

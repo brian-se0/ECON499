@@ -124,7 +124,13 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
             'sample_end_date: "2021-01-05"\n'
         ),
     )
-    metrics_config_path = _write_yaml(tmp_path / "metrics.yaml", "positive_floor: 1.0e-8\n")
+    metrics_config_path = _write_yaml(
+        tmp_path / "metrics.yaml",
+        (
+            "positive_floor: 1.0e-8\n"
+            'primary_loss_metric: "observed_mse_total_variance"\n'
+        ),
+    )
     stats_config_path = _write_yaml(
         tmp_path / "stats.yaml",
         (

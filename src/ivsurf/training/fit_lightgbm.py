@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 
 from ivsurf.config import TrainingProfileConfig
@@ -16,6 +18,8 @@ def fit_and_predict_lightgbm(
     predict_index: np.ndarray,
     matrices: DatasetMatrices,
     training_profile: TrainingProfileConfig,
+    *,
+    on_factor_progress: Callable[[int, int], None] | None = None,
 ) -> np.ndarray:
     """Fit LightGBM with validation-aware early stopping and return predictions."""
 
@@ -28,5 +32,6 @@ def fit_and_predict_lightgbm(
         validation_features=matrices.features[validation_index],
         validation_targets=matrices.targets[validation_index],
         training_profile=training_profile,
+        on_factor_complete=on_factor_progress,
     )
     return model.predict(matrices.features[predict_index])

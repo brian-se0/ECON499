@@ -167,6 +167,26 @@ class StatsTestConfig(BaseModel):
         return values
 
 
+class EvaluationMetricsConfig(BaseModel):
+    """Shared evaluation metric configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    positive_floor: float = Field(gt=0.0)
+    primary_loss_metric: str
+
+    @field_validator("primary_loss_metric")
+    @classmethod
+    def validate_primary_loss_metric(cls, value: str) -> str:
+        if value.startswith("mean_") or value.startswith("std_"):
+            message = (
+                "primary_loss_metric must name the base daily loss metric, "
+                "not a summary column prefix."
+            )
+            raise ValueError(message)
+        return value
+
+
 class StressWindowConfig(BaseModel):
     """Named stress subperiod for slice reporting."""
 
@@ -325,6 +345,7 @@ class TrainingProfileConfig(BaseModel):
     epochs: PositiveInt
     neural_early_stopping_patience: PositiveInt = 10
     neural_early_stopping_min_delta: float = Field(default=0.0, ge=0.0)
+    neural_min_epochs_before_early_stop: PositiveInt = 1
     lightgbm_early_stopping_rounds: PositiveInt = 25
     lightgbm_early_stopping_min_delta: float = Field(default=0.0, ge=0.0)
     lightgbm_first_metric_only: bool = True

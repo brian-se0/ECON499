@@ -20,6 +20,8 @@ def fit_and_predict_neural(
     *,
     trial: optuna.Trial | None = None,
     trial_step_offset: int = 0,
+    validation_metric_name: str = "observed_mse_total_variance",
+    validation_positive_floor: float = 1.0e-8,
 ) -> np.ndarray:
     """Fit the neural model with validation-aware stopping and return predictions."""
 
@@ -36,5 +38,7 @@ def fit_and_predict_neural(
         training_profile=training_profile,
         trial=trial,
         trial_step_offset=trial_step_offset,
+        validation_metric_name=validation_metric_name,
+        validation_positive_floor=validation_positive_floor,
     )
     return model.predict(matrices.features[predict_index])

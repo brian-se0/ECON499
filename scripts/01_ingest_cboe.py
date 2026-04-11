@@ -67,6 +67,11 @@ def main(
             )
             result_rows.append(result_row)
     written_results = [row for row in result_rows if row["status"] == "written"]
+    written_output_paths = [
+        Path(str(row["bronze_path"]))
+        for row in written_results
+        if row["bronze_path"] is not None
+    ]
     skipped_results = [
         row for row in result_rows if row["status"] == "skipped_out_of_sample_window"
     ]
@@ -93,7 +98,7 @@ def main(
         started_at=started_at,
         config_paths=[raw_config_path],
         input_artifact_paths=zip_paths,
-        output_artifact_paths=[manifest_path],
+        output_artifact_paths=[manifest_path, *written_output_paths],
         data_manifest_paths=zip_paths,
         extra_metadata={
             "limit": limit,

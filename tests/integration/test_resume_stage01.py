@@ -97,3 +97,16 @@ def test_stage01_resume_reruns_only_missing_output_item(
     )
     assert manifest_payload["files_written"] == 2
     assert len(manifest_payload["results"]) == 2
+    run_manifest_path = sorted(
+        (tmp_path / "data" / "manifests" / "runs" / "01_ingest_cboe").glob("*.json")
+    )[-1]
+    run_manifest_payload = orjson.loads(run_manifest_path.read_bytes())
+    output_artifact_paths = {
+        artifact["path"] for artifact in run_manifest_payload["output_artifacts"]
+    }
+    assert str(
+        (tmp_path / "data" / "bronze" / "year=2021" / f"{raw_files[0].stem}.parquet").resolve()
+    ) in output_artifact_paths
+    assert str(
+        (tmp_path / "data" / "bronze" / "year=2021" / f"{raw_files[1].stem}.parquet").resolve()
+    ) in output_artifact_paths

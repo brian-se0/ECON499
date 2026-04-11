@@ -5,10 +5,13 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType
 
+import numpy as np
 import optuna
+import polars as pl
 import pytest
 
 from ivsurf.config import HpoProfileConfig
+from ivsurf.evaluation.loss_panels import build_daily_loss_frame, mean_daily_loss_metric
 from ivsurf.training.tuning import (
     TuningResult,
     load_required_tuning_results,
@@ -107,3 +110,68 @@ def test_stage05_uses_the_configured_optuna_sampler() -> None:
     )
 
     assert isinstance(sampler, optuna.samplers.TPESampler)
+
+
+def test_stage05_daily_loss_metric_matches_stage07_daily_aggregation() -> None:
+    y_true = np.asarray(
+        [
+            [0.10, 0.20],
+            [0.30, 0.40],
+        ],
+        dtype=np.float64,
+    )
+    y_pred = np.asarray(
+        [
+            [0.11, 0.18],
+            [0.28, 0.42],
+        ],
+        dtype=np.float64,
+    )
+    observed_masks = np.asarray(
+        [
+            [1.0, 0.0],
+            [1.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    vega_weights = np.asarray(
+        [
+            [2.0, 0.0],
+            [1.0, 3.0],
+        ],
+        dtype=np.float64,
+    )
+
+    selected_metric = mean_daily_loss_metric(
+        metric_name="observed_mse_total_variance",
+        y_true=y_true,
+        y_pred=y_pred,
+        observed_masks=observed_masks,
+        vega_weights=vega_weights,
+        positive_floor=1.0e-8,
+    )
+
+    panel = pl.DataFrame(
+        {
+            "model_name": ["candidate"] * 4,
+            "quote_date": [date(2021, 1, 4), date(2021, 1, 4), date(2021, 1, 5), date(2021, 1, 5)],
+            "target_date": [date(2021, 1, 5), date(2021, 1, 5), date(2021, 1, 6), date(2021, 1, 6)],
+            "actual_completed_total_variance": y_true.reshape(-1),
+            "predicted_total_variance": y_pred.reshape(-1),
+            "actual_completed_iv": np.sqrt(y_true.reshape(-1)),
+            "predicted_iv": np.sqrt(y_pred.reshape(-1)),
+            "actual_iv_change": np.zeros(4, dtype=np.float64),
+            "predicted_iv_change": np.zeros(4, dtype=np.float64),
+            "actual_observed_mask": observed_masks.reshape(-1) > 0.5,
+            "observed_weight": (observed_masks * vega_weights).reshape(-1),
+            "full_grid_weight": np.ones(4, dtype=np.float64),
+        }
+    )
+    daily_loss_frame = build_daily_loss_frame(
+        panel=panel,
+        positive_floor=1.0e-8,
+        full_grid_weighting="uniform",
+    )
+    expected = float(daily_loss_frame["observed_mse_total_variance"].mean())
+
+    assert selected_metric == pytest.approx(expected, rel=1.0e-12, abs=1.0e-12)

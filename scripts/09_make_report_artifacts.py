@@ -8,6 +8,7 @@ import polars as pl
 import typer
 
 from ivsurf.config import (
+    EvaluationMetricsConfig,
     HpoProfileConfig,
     RawDataConfig,
     ReportArtifactsConfig,
@@ -39,6 +40,8 @@ from ivsurf.reports.tables import (
     build_report_overview_markdown,
     build_slice_leader_table,
     build_spa_table,
+    build_tail_risk_table,
+    build_worst_day_drilldown_table,
     write_table_artifacts,
 )
 from ivsurf.reproducibility import write_run_manifest
@@ -159,7 +162,7 @@ def main(
     training_profile = TrainingProfileConfig.model_validate(
         load_yaml_config(training_profile_config_path)
     )
-    metrics_config = load_yaml_config(metrics_config_path)
+    metrics_config = EvaluationMetricsConfig.model_validate(load_yaml_config(metrics_config_path))
     stats_config = StatsTestConfig.model_validate(load_yaml_config(stats_config_path))
     report_config = ReportArtifactsConfig.model_validate(load_yaml_config(report_config_path))
     grid = SurfaceGrid.from_config(surface_config)
@@ -179,6 +182,12 @@ def main(
         message = (
             "Report official_loss_metrics must exactly match configs/eval/stats_tests.yaml "
             f"({stats_config.loss_metrics!r} != {report_config.official_loss_metrics!r})."
+        )
+        raise ValueError(message)
+    if metrics_config.primary_loss_metric != report_config.primary_loss_metric:
+        message = (
+            "Report primary_loss_metric must match configs/eval/metrics.yaml "
+            f"({report_config.primary_loss_metric!r} != {metrics_config.primary_loss_metric!r})."
         )
         raise ValueError(message)
 
@@ -258,7 +267,7 @@ def main(
         progress.update(task_id, description="Stage 09 computing slice and diagnostic reports")
         slice_metric_frame = build_slice_metric_frame(
             panel=panel,
-            positive_floor=float(metrics_config["positive_floor"]),
+            positive_floor=metrics_config.positive_floor,
             stress_windows=report_config.stress_windows,
         )
         forecast_diagnostics = build_forecast_diagnostic_frame(forecast_frame, grid)
@@ -283,6 +292,8 @@ def main(
         ranked_loss_tables_by_metric: dict[str, pl.DataFrame] = {}
         slice_leader_tables_by_metric: dict[str, pl.DataFrame] = {}
         mcs_tables_by_metric: dict[str, pl.DataFrame] = {}
+        tail_risk_tables_by_metric: dict[str, pl.DataFrame] = {}
+        worst_day_tables_by_metric: dict[str, pl.DataFrame] = {}
         best_loss_by_metric_rows: list[dict[str, object]] = []
         ranked_hedging_table = build_ranked_hedging_table(
             hedging_summary=hedging_summary,
@@ -334,9 +345,21 @@ def main(
                 benchmark_model=report_config.benchmark_model,
                 metric_column=_slice_metric_column_for_primary_loss(loss_metric),
             )
+            tail_risk_table = build_tail_risk_table(
+                daily_loss_frame=daily_loss_frame,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=loss_metric,
+            )
+            worst_day_table = build_worst_day_drilldown_table(
+                daily_loss_frame=daily_loss_frame,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=loss_metric,
+            )
             ranked_loss_tables_by_metric[loss_metric] = ranked_loss_table
             slice_leader_tables_by_metric[loss_metric] = slice_leader_table
             mcs_tables_by_metric[loss_metric] = mcs_table
+            tail_risk_tables_by_metric[loss_metric] = tail_risk_table
+            worst_day_tables_by_metric[loss_metric] = worst_day_table
             best_loss_row = ranked_loss_table.row(0, named=True)
             best_loss_by_metric_rows.append(
                 {
@@ -351,18 +374,26 @@ def main(
             tables[f"spa_result{suffix}"] = spa_table
             tables[f"mcs_result{suffix}"] = mcs_table
             tables[f"slice_leaders{suffix}"] = slice_leader_table
+            tables[f"tail_risk_summary{suffix}"] = tail_risk_table
+            tables[f"worst_day_drilldown{suffix}"] = worst_day_table
             if loss_metric == report_config.primary_loss_metric:
                 tables["ranked_loss_summary"] = ranked_loss_table
                 tables["dm_results"] = dm_table
                 tables["spa_result"] = spa_table
                 tables["mcs_result"] = mcs_table
                 tables["slice_leaders"] = slice_leader_table
+                tables["tail_risk_summary"] = tail_risk_table
+                tables["worst_day_drilldown"] = worst_day_table
 
         primary_ranked_loss_table = ranked_loss_tables_by_metric[report_config.primary_loss_metric]
         primary_slice_leader_table = slice_leader_tables_by_metric[
             report_config.primary_loss_metric
         ]
         primary_mcs_table = mcs_tables_by_metric[report_config.primary_loss_metric]
+        primary_tail_risk_table = tail_risk_tables_by_metric[report_config.primary_loss_metric]
+        primary_worst_day_drilldown = worst_day_tables_by_metric[
+            report_config.primary_loss_metric
+        ]
         table_names = tuple(tables.keys())
         table_output_paths = [
             path
@@ -534,6 +565,8 @@ def main(
                     best_loss_by_metric_rows=best_loss_by_metric_rows,
                     summary_metric_column=primary_summary_mean_column,
                     ranked_loss_table=primary_ranked_loss_table,
+                    tail_risk_table=primary_tail_risk_table,
+                    worst_day_drilldown=primary_worst_day_drilldown,
                     ranked_hedging_table=ranked_hedging_table,
                     mcs_table=primary_mcs_table,
                     slice_leader_table=primary_slice_leader_table,

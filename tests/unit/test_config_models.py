@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ivsurf.config import (
+    EvaluationMetricsConfig,
     HedgingConfig,
     RawDataConfig,
     ReportArtifactsConfig,
@@ -59,6 +60,14 @@ def test_raw_data_config_rejects_reversed_sample_window() -> None:
 def test_report_artifacts_config_rejects_summary_column_metric_name() -> None:
     with pytest.raises(ValueError, match="base daily loss metric"):
         ReportArtifactsConfig(primary_loss_metric="mean_observed_wrmse_total_variance")
+
+
+def test_evaluation_metrics_config_rejects_summary_column_metric_name() -> None:
+    with pytest.raises(ValueError, match="base daily loss metric"):
+        EvaluationMetricsConfig(
+            positive_floor=1.0e-8,
+            primary_loss_metric="mean_observed_mse_total_variance",
+        )
 
 
 def test_report_artifacts_config_requires_primary_metric_in_official_metrics() -> None:

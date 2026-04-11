@@ -169,7 +169,13 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
             "expanding_train: true\n"
         ),
     )
-    _write_text(tmp_path / "configs" / "eval" / "metrics.yaml", "positive_floor: 1.0e-8\n")
+    _write_text(
+        tmp_path / "configs" / "eval" / "metrics.yaml",
+        (
+            "positive_floor: 1.0e-8\n"
+            'primary_loss_metric: "observed_mse_total_variance"\n'
+        ),
+    )
     _write_text(
         tmp_path / "configs" / "eval" / "stats_tests.yaml",
         (
@@ -283,6 +289,7 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
         ):
             stage05.main(
                 model_name=model_name,
+                metrics_config_path=tmp_path / "configs" / "eval" / "metrics.yaml",
                 lightgbm_config_path=lightgbm_config_path,
                 neural_config_path=neural_config_path,
                 hpo_profile_config_path=tmp_path / "configs" / "workflow" / "hpo_30_trials.yaml",
@@ -292,6 +299,7 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
                 / "train_30_epochs.yaml",
             )
         stage06.main(
+            metrics_config_path=tmp_path / "configs" / "eval" / "metrics.yaml",
             ridge_config_path=ridge_config_path,
             elasticnet_config_path=elasticnet_config_path,
             har_config_path=har_config_path,
@@ -316,11 +324,19 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
         / "ranked_loss_summary__observed_qlike_total_variance.csv"
     ).exists()
     assert (report_dir / "tables" / "dm_results__observed_qlike_total_variance.csv").exists()
+    assert (report_dir / "tables" / "tail_risk_summary.csv").exists()
+    assert (report_dir / "tables" / "worst_day_drilldown.csv").exists()
     assert (report_dir / "details" / "daily_loss_frame.csv").exists()
     assert (report_dir / "details" / "slice_metric_frame.csv").exists()
 
     bronze_files = sorted((tmp_path / "data" / "bronze").glob("year=*/*.parquet"))
     assert len(bronze_files) == len(quote_dates)
+    tuning_dir = manifests_dir / "tuning" / workflow_label.split("__")[0]
+    assert (tuning_dir / "elasticnet__diagnostics.parquet").exists()
+    assert (tuning_dir / "lightgbm__diagnostics.parquet").exists()
+    assert (
+        tuning_dir / "neural_surface__diagnostics.parquet"
+    ).exists()
 
     ranked_loss_csv = (report_dir / "tables" / "ranked_loss_summary.csv").read_text(
         encoding="utf-8"
@@ -337,3 +353,4 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
     assert "observed_qlike_total_variance" in daily_loss_csv
     assert "Official loss metrics" in report_index
     assert "observed_qlike_total_variance" in report_index
+    assert "Tail Risk" in report_index

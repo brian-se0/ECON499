@@ -10,6 +10,7 @@ import polars as pl
 import typer
 
 from ivsurf.config import (
+    EvaluationMetricsConfig,
     HpoProfileConfig,
     RawDataConfig,
     StatsTestConfig,
@@ -91,7 +92,7 @@ def main(
     training_profile = TrainingProfileConfig.model_validate(
         load_yaml_config(training_profile_config_path)
     )
-    metrics_config = load_yaml_config(metrics_config_path)
+    metrics_config = EvaluationMetricsConfig.model_validate(load_yaml_config(metrics_config_path))
     stats_config = StatsTestConfig.model_validate(load_yaml_config(stats_config_path))
     workflow_paths = resolve_workflow_run_paths(
         raw_config,
@@ -159,7 +160,7 @@ def main(
             panel = build_forecast_realization_panel(
                 actual_surface_frame=actual_surface_frame,
                 forecast_frame=forecast_frame,
-                total_variance_floor=float(metrics_config["positive_floor"]),
+                total_variance_floor=metrics_config.positive_floor,
             )
             write_parquet_frame(panel, panel_path)
             resumer.mark_complete(
@@ -176,7 +177,7 @@ def main(
             progress.update(task_id, description="Stage 07 computing daily loss panel")
             daily_loss_frame = build_daily_loss_frame(
                 panel=panel,
-                positive_floor=float(metrics_config["positive_floor"]),
+                positive_floor=metrics_config.positive_floor,
                 full_grid_weighting=stats_config.full_grid_weighting,
             )
             write_parquet_frame(daily_loss_frame, daily_loss_path)
