@@ -7,7 +7,7 @@ from typing import Literal
 
 import polars as pl
 
-from ivsurf.io.atomic import cleanup_atomic_temp_files, write_text_atomic
+from ivsurf.io.atomic import cleanup_atomic_temp_files, replace_path_atomic, write_text_atomic
 
 
 def write_parquet_frame(
@@ -26,7 +26,7 @@ def write_parquet_frame(
         if temp_path.exists():
             temp_path.unlink()
         frame.write_parquet(temp_path, compression=compression, statistics=statistics)
-        temp_path.replace(output_path)
+        replace_path_atomic(temp_path, output_path)
     finally:
         if temp_path.exists():
             temp_path.unlink()

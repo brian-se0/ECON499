@@ -14,6 +14,10 @@ def test_validate_raw_columns_accepts_audited_extra_columns() -> None:
     validate_raw_columns((*RAW_COLUMNS, *RAW_ALLOWED_EXTRA_COLUMNS))
 
 
+def test_validate_raw_columns_accepts_audited_implied_underlying_price_column() -> None:
+    validate_raw_columns((*RAW_COLUMNS, "implied_underlying_price_1545"))
+
+
 def test_validate_raw_columns_rejects_unexpected_extra_vendor_column() -> None:
     with pytest.raises(
         SchemaDriftError,

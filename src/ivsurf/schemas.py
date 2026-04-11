@@ -34,6 +34,7 @@ RAW_COLUMNS: tuple[str, ...] = (
 )
 
 RAW_ALLOWED_EXTRA_COLUMNS: tuple[str, ...] = (
+    "implied_underlying_price_1545",
     "open",
     "high",
     "low",
