@@ -294,13 +294,6 @@ def main(
                         else:
                             fit_index = np.concatenate([train_index, validation_index])
                             predictions = fit_and_predict(model, fit_index, test_index, matrices)
-                            if model_name == "ridge":
-                                model_metadata["ridge_clip_predictions_to_train_log_range"] = (
-                                    model.clip_predictions_to_train_log_range
-                                )
-                                model_metadata["ridge_total_clipped_predictions"] = int(
-                                    model_metadata.get("ridge_total_clipped_predictions", 0)
-                                ) + model.last_clipped_prediction_count
                             if model_name == "elasticnet":
                                 model_metadata["elasticnet_tol"] = model.tol
                                 model_metadata["elasticnet_max_iter"] = model.max_iter

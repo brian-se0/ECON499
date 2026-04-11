@@ -9,6 +9,7 @@ import numpy as np
 import optuna
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
@@ -51,7 +52,8 @@ class NeuralSurfaceMLP(nn.Module):
         self.network = nn.Sequential(*layers)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        return cast(torch.Tensor, self.network(features))
+        raw_predictions = cast(torch.Tensor, self.network(features))
+        return cast(torch.Tensor, F.softplus(raw_predictions.to(dtype=torch.float64)))
 
 
 def _resolve_device(device_name: str) -> torch.device:
@@ -82,44 +84,18 @@ def _standardize_features(
     return np.asarray((features - mean) / scale, dtype=np.float64)
 
 
-def _log_target_envelope(targets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    if targets.ndim != 2:
-        message = "NeuralSurfaceRegressor expects 2D target arrays."
-        raise ValueError(message)
-    if not np.isfinite(targets).all():
-        message = "NeuralSurfaceRegressor targets must be finite."
-        raise ValueError(message)
-    if not np.all(targets > 0.0):
-        message = "NeuralSurfaceRegressor targets must be strictly positive total variance."
-        raise ValueError(message)
-    log_targets = np.log(targets)
-    return (
-        np.asarray(np.min(log_targets, axis=0), dtype=np.float64),
-        np.asarray(np.max(log_targets, axis=0), dtype=np.float64),
-    )
-
-
-def _bounded_log_total_variance(
-    raw_log_predictions: torch.Tensor,
+def _validated_total_variance(
+    total_variance_predictions: torch.Tensor,
     *,
-    log_target_min: torch.Tensor,
-    log_target_max: torch.Tensor,
     context: str,
 ) -> torch.Tensor:
-    if not bool(torch.isfinite(raw_log_predictions).all().detach().item()):
-        message = f"{context} produced non-finite raw log-total-variance outputs."
-        raise RuntimeError(message)
-    midpoint = (log_target_min + log_target_max) * 0.5
-    half_width = (log_target_max - log_target_min) * 0.5
-    return midpoint + (half_width * torch.tanh(raw_log_predictions))
-
-
-def _exp_total_variance(log_predictions: torch.Tensor, *, context: str) -> torch.Tensor:
-    predictions = torch.exp(log_predictions)
-    if not bool(torch.isfinite(predictions).all().detach().item()):
+    if not bool(torch.isfinite(total_variance_predictions).all().detach().item()):
         message = f"{context} produced non-finite total-variance predictions."
         raise RuntimeError(message)
-    return predictions
+    if not bool((total_variance_predictions >= 0.0).all().detach().item()):
+        message = f"{context} produced negative total-variance predictions."
+        raise RuntimeError(message)
+    return total_variance_predictions
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,8 +118,6 @@ def _predict_total_variance_array(
     *,
     device: torch.device,
     standardized_features: np.ndarray,
-    log_target_min: np.ndarray,
-    log_target_max: np.ndarray,
 ) -> np.ndarray:
     with torch.inference_mode():
         feature_tensor = torch.as_tensor(
@@ -151,23 +125,8 @@ def _predict_total_variance_array(
             dtype=torch.float32,
             device=device,
         )
-        log_target_min_tensor = torch.as_tensor(
-            log_target_min,
-            dtype=torch.float32,
-            device=device,
-        )
-        log_target_max_tensor = torch.as_tensor(
-            log_target_max,
-            dtype=torch.float32,
-            device=device,
-        )
-        predictions = _exp_total_variance(
-            _bounded_log_total_variance(
-                model(feature_tensor),
-                log_target_min=log_target_min_tensor,
-                log_target_max=log_target_max_tensor,
-                context="NeuralSurfaceRegressor inference",
-            ),
+        predictions = _validated_total_variance(
+            model(feature_tensor),
             context="NeuralSurfaceRegressor inference",
         )
     return np.asarray(predictions.cpu().numpy(), dtype=np.float64)
@@ -184,15 +143,11 @@ def _validation_score_and_diagnostics(
     grid_shape: tuple[int, int],
     metric_name: str,
     positive_floor: float,
-    log_target_min: np.ndarray,
-    log_target_max: np.ndarray,
 ) -> NeuralValidationDiagnostics:
     predictions = _predict_total_variance_array(
         model,
         device=device,
         standardized_features=standardized_features,
-        log_target_min=log_target_min,
-        log_target_max=log_target_max,
     )
     metric_value = mean_daily_loss_metric(
         metric_name=metric_name,
@@ -238,8 +193,6 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
     best_validation_score: float | None = None
     feature_mean: np.ndarray | None = None
     feature_scale: np.ndarray | None = None
-    training_log_target_min: np.ndarray | None = None
-    training_log_target_max: np.ndarray | None = None
     validation_diagnostics: NeuralValidationDiagnostics | None = None
 
     def fit(
@@ -282,7 +235,6 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
         device = _resolve_device(self.config.device)
         input_dim = features.shape[1]
         output_dim = targets.shape[1]
-        training_log_target_min, training_log_target_max = _log_target_envelope(targets)
         feature_mean, feature_scale = _feature_standardization_stats(features)
         standardized_features = _standardize_features(
             features,
@@ -305,16 +257,6 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             depth=self.config.depth,
             dropout=self.config.dropout,
         ).to(device)
-        log_target_min_tensor = torch.as_tensor(
-            training_log_target_min,
-            dtype=torch.float32,
-            device=device,
-        )
-        log_target_max_tensor = torch.as_tensor(
-            training_log_target_max,
-            dtype=torch.float32,
-            device=device,
-        )
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=self.config.learning_rate,
@@ -376,13 +318,8 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                 )
                 optimizer.zero_grad(set_to_none=True)
                 with torch.autocast(device_type=device.type, enabled=use_cuda):
-                    predictions = _exp_total_variance(
-                        _bounded_log_total_variance(
-                            model(batch_features),
-                            log_target_min=log_target_min_tensor,
-                            log_target_max=log_target_max_tensor,
-                            context="NeuralSurfaceRegressor training",
-                        ),
+                    predictions = _validated_total_variance(
+                        model(batch_features),
                         context="NeuralSurfaceRegressor training",
                     )
                     loss = weighted_surface_mse(
@@ -448,8 +385,6 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                 grid_shape=self.grid_shape,
                 metric_name=validation_metric_name,
                 positive_floor=validation_positive_floor,
-                log_target_min=training_log_target_min,
-                log_target_max=training_log_target_max,
             )
             validation_score = validation_diagnostics.metric_value
             if validation_score < (best_validation_score - min_delta):
@@ -493,8 +428,6 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                 grid_shape=self.grid_shape,
                 metric_name=validation_metric_name,
                 positive_floor=validation_positive_floor,
-                log_target_min=training_log_target_min,
-                log_target_max=training_log_target_max,
             )
             best_validation_score = fallback_diagnostics.metric_value
             best_epoch = self.epochs_completed
@@ -506,8 +439,6 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
         )
         self.feature_mean = feature_mean
         self.feature_scale = feature_scale
-        self.training_log_target_min = training_log_target_min
-        self.training_log_target_max = training_log_target_max
         self.validation_diagnostics = best_validation_diagnostics
         self.model = model.eval()
         return self
@@ -517,8 +448,6 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             self.model is None
             or self.feature_mean is None
             or self.feature_scale is None
-            or self.training_log_target_min is None
-            or self.training_log_target_max is None
         ):
             message = "NeuralSurfaceRegressor must be fit before predict."
             raise ValueError(message)
@@ -532,6 +461,4 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             self.model,
             device=device,
             standardized_features=standardized_features,
-            log_target_min=self.training_log_target_min,
-            log_target_max=self.training_log_target_max,
         )

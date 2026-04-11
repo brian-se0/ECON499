@@ -27,7 +27,6 @@ from ivsurf.models.base import DatasetMatrices, dataset_to_matrices
 from ivsurf.models.elasticnet import ElasticNetSurfaceModel
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
 from ivsurf.models.neural_surface import NeuralSurfaceRegressor
-from ivsurf.models.ridge import RidgeSurfaceModel
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
@@ -96,8 +95,6 @@ def _model_specific_diagnostics(model: object) -> dict[str, object]:
         "neural_calendar_penalty": None,
         "neural_convexity_penalty": None,
         "neural_roughness_penalty": None,
-        "ridge_clip_predictions_to_train_log_range": None,
-        "ridge_clipped_prediction_count": None,
     }
     if isinstance(model, ElasticNetSurfaceModel):
         diagnostics.update(
@@ -132,15 +129,6 @@ def _model_specific_diagnostics(model: object) -> dict[str, object]:
                     "neural_roughness_penalty": model.validation_diagnostics.roughness_penalty,
                 }
             )
-    if isinstance(model, RidgeSurfaceModel):
-        diagnostics.update(
-            {
-                "ridge_clip_predictions_to_train_log_range": (
-                    model.clip_predictions_to_train_log_range
-                ),
-                "ridge_clipped_prediction_count": model.last_clipped_prediction_count,
-            }
-        )
     return diagnostics
 
 

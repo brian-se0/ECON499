@@ -6,7 +6,6 @@ from typing import cast
 import numpy as np
 import optuna
 import pytest
-import torch
 from sklearn.exceptions import ConvergenceWarning
 
 from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
@@ -114,18 +113,25 @@ def test_neural_training_uses_validation_early_stopping() -> None:
     assert predictions.shape == (4, 2)
     assert (predictions > 0.0).all()
     assert np.isfinite(predictions).all()
-    assert model.training_log_target_min is not None
-    assert model.training_log_target_max is not None
 
 
-def test_neural_prediction_is_bounded_to_training_log_target_envelope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    features = np.asarray([[0.0], [1.0], [2.0]], dtype=np.float64)
-    targets = np.asarray([[0.1, 0.2], [0.2, 0.3], [0.3, 0.4]], dtype=np.float64)
-    observed_masks = np.ones((3, 2), dtype=np.float64)
-    vega_weights = np.ones((3, 2), dtype=np.float64)
-    training_weights = np.ones((3, 2), dtype=np.float64)
+def test_neural_prediction_reuses_train_window_standardization_and_stays_positive() -> None:
+    features = np.asarray(
+        [
+            [1.0e-3, 1.0e3, 7.0],
+            [2.0e-3, 2.0e3, 7.0],
+            [3.0e-3, 3.0e3, 7.0],
+            [4.0e-3, 4.0e3, 7.0],
+        ],
+        dtype=np.float64,
+    )
+    targets = np.asarray(
+        [[0.10, 0.20], [0.12, 0.22], [0.14, 0.24], [0.16, 0.26]],
+        dtype=np.float64,
+    )
+    observed_masks = np.ones((4, 2), dtype=np.float64)
+    vega_weights = np.ones((4, 2), dtype=np.float64)
+    training_weights = np.ones((4, 2), dtype=np.float64)
     model = NeuralSurfaceRegressor(
         config=NeuralModelConfig(
             hidden_width=4,
@@ -148,22 +154,25 @@ def test_neural_prediction_is_bounded_to_training_log_target_envelope(
         vega_weights=vega_weights,
         training_weights=training_weights,
     )
-
-    def fake_forward(batch_features: torch.Tensor) -> torch.Tensor:
-        return torch.full(
-            (batch_features.shape[0], targets.shape[1]),
-            1.0e9,
-            dtype=batch_features.dtype,
-            device=batch_features.device,
+    expected_feature_mean = features.mean(axis=0)
+    expected_feature_scale = np.where(features.std(axis=0) > 0.0, features.std(axis=0), 1.0)
+    predictions = model.predict(
+        np.asarray(
+            [
+                [5.0e-3, 5.0e3, 7.0],
+                [6.0e-3, 6.0e3, 7.0],
+            ],
+            dtype=np.float64,
         )
+    )
 
-    assert model.model is not None
-    monkeypatch.setattr(model.model, "forward", fake_forward)
-    predictions = model.predict(np.asarray([[10.0]], dtype=np.float64))
-
+    assert model.feature_mean is not None
+    assert model.feature_scale is not None
+    assert np.allclose(model.feature_mean, expected_feature_mean)
+    assert np.allclose(model.feature_scale, expected_feature_scale)
+    assert predictions.shape == (2, 2)
     assert np.isfinite(predictions).all()
-    assert model.training_log_target_max is not None
-    assert np.allclose(predictions[0], np.exp(model.training_log_target_max))
+    assert (predictions > 0.0).all()
 
 
 def test_lightgbm_training_uses_validation_early_stopping() -> None:
@@ -290,10 +299,10 @@ def test_elasticnet_fit_raises_typed_convergence_error_on_warning(
         )
 
 
-def test_ridge_prediction_clipping_stays_within_training_log_envelope(
+def test_ridge_prediction_returns_unclipped_positive_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    model = RidgeSurfaceModel(alpha=1.0, clip_predictions_to_train_log_range=True)
+    model = RidgeSurfaceModel(alpha=1.0)
     features = np.asarray([[0.0], [1.0], [2.0]], dtype=np.float64)
     targets = np.asarray([[0.1, 0.2], [0.2, 0.3], [0.3, 0.4]], dtype=np.float64)
     model.fit(features, targets)
@@ -305,9 +314,8 @@ def test_ridge_prediction_clipping_stays_within_training_log_envelope(
     predictions = model.predict(np.asarray([[10.0], [11.0]], dtype=np.float64))
 
     assert np.isfinite(predictions).all()
-    assert model.training_log_target_max is not None
-    assert np.allclose(predictions[0], np.exp(model.training_log_target_max))
-    assert model.last_clipped_prediction_count == 4
+    assert (predictions > 0.0).all()
+    assert np.allclose(predictions, np.full((2, 2), np.exp(100.0), dtype=np.float64))
 
 
 def test_no_change_feature_layout_guard_accepts_aligned_lag1_surface_columns() -> None:

@@ -42,18 +42,6 @@ def _int_param(params: Mapping[str, object], key: str) -> int:
     return int(value)
 
 
-def _bool_param(params: Mapping[str, object], key: str) -> bool:
-    value = params[key]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"true", "false"}:
-            return lowered == "true"
-    message = f"Expected {key} to be boolean-like, found {type(value).__name__}."
-    raise TypeError(message)
-
-
 def suggest_model_from_trial(
     *,
     model_name: str,
@@ -66,10 +54,7 @@ def suggest_model_from_trial(
     """Construct a tunable model by sampling a documented Optuna search space."""
 
     if model_name == "ridge":
-        return RidgeSurfaceModel(
-            alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True),
-            clip_predictions_to_train_log_range=True,
-        )
+        return RidgeSurfaceModel(alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True))
     if model_name == "elasticnet":
         return ElasticNetSurfaceModel(
             alpha=trial.suggest_float("alpha", 1.0e-2, 10.0, log=True),
@@ -151,13 +136,7 @@ def make_model_from_params(
     if model_name == "no_change":
         return NoChangeSurfaceModel()
     if model_name == "ridge":
-        return RidgeSurfaceModel(
-            alpha=_float_param(params, "alpha"),
-            clip_predictions_to_train_log_range=_bool_param(
-                params,
-                "clip_predictions_to_train_log_range",
-            ),
-        )
+        return RidgeSurfaceModel(alpha=_float_param(params, "alpha"))
     if model_name == "elasticnet":
         return ElasticNetSurfaceModel(
             alpha=_float_param(params, "alpha"),
