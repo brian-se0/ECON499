@@ -32,7 +32,7 @@ The thesis universe is the SPX underlying universe defined by `underlying_symbol
 
 ## Requirements
 
-- Python `3.14.3`
+- Python `3.13.5`
 - `uv`
 - GNU Make
 

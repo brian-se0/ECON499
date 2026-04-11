@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 
+import pytest
 from rich.progress import SpinnerColumn, TextColumn
 
 from ivsurf.progress import _supports_braille_spinner, create_progress
@@ -21,14 +22,16 @@ def test_supports_braille_spinner_accepts_utf8() -> None:
 
 
 def test_create_progress_uses_ascii_safe_leading_column_when_stdout_is_cp1252(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "stdout", _DummyStdout("cp1252"))
     progress = create_progress()
     assert isinstance(progress.columns[0], TextColumn)
 
 
-def test_create_progress_uses_spinner_when_stdout_is_utf8(monkeypatch) -> None:
+def test_create_progress_uses_spinner_when_stdout_is_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(sys, "stdout", _DummyStdout("utf-8"))
     progress = create_progress()
     assert isinstance(progress.columns[0], SpinnerColumn)
