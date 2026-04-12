@@ -8,6 +8,7 @@ import polars as pl
 import typer
 
 from ivsurf.config import (
+    EvaluationMetricsConfig,
     HedgingConfig,
     HpoProfileConfig,
     RawDataConfig,
@@ -29,6 +30,7 @@ from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES
 from ivsurf.training.tuning import (
     load_required_tuning_results,
     require_consistent_clean_evaluation_policy,
+    require_matching_primary_loss_metric,
 )
 from ivsurf.workflow import resolve_workflow_run_paths
 
@@ -43,6 +45,7 @@ def _actual_surface_lookup(actual_surface_frame: pl.DataFrame) -> dict[object, p
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
+    metrics_config_path: Path = Path("configs/eval/metrics.yaml"),
     hedging_config_path: Path = Path("configs/eval/hedging.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
     training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
@@ -53,6 +56,7 @@ def main(
 
     started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
+    metrics_config = EvaluationMetricsConfig.model_validate(load_yaml_config(metrics_config_path))
     hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
     training_profile = TrainingProfileConfig.model_validate(
         load_yaml_config(training_profile_config_path)
@@ -79,6 +83,7 @@ def main(
         context_hash=build_resume_context_hash(
             config_paths=[
                 raw_config_path,
+                metrics_config_path,
                 hedging_config_path,
                 hpo_profile_config_path,
                 training_profile_config_path,
@@ -96,6 +101,10 @@ def main(
         raw_config.manifests_dir,
         hpo_profile_name=hpo_profile.profile_name,
         model_names=TUNABLE_MODEL_NAMES,
+    )
+    require_matching_primary_loss_metric(
+        tuning_results.values(),
+        expected_primary_loss_metric=metrics_config.primary_loss_metric,
     )
     clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
 
@@ -209,6 +218,7 @@ def main(
         started_at=started_at,
         config_paths=[
             raw_config_path,
+            metrics_config_path,
             hedging_config_path,
             hpo_profile_config_path,
             training_profile_config_path,
@@ -231,6 +241,7 @@ def main(
             "n_results": results_frame.height,
             "hedge_spot_assumption": "no_change",
             "spot_source": "median_valid_active_underlying_price_1545",
+            "primary_loss_metric": metrics_config.primary_loss_metric,
             "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
             "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
             "workflow_run_label": workflow_paths.run_label,

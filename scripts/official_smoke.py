@@ -271,6 +271,7 @@ def run_official_smoke(
     )
     stage08.main(
         raw_config_path=raw_config_path,
+        metrics_config_path=metrics_config_path,
         hedging_config_path=smoke_hedging_config_path,
         hpo_profile_config_path=smoke_hpo_profile_path,
         training_profile_config_path=smoke_train_profile_path,

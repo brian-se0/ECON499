@@ -36,6 +36,7 @@ from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES
 from ivsurf.training.tuning import (
     load_required_tuning_results,
     require_consistent_clean_evaluation_policy,
+    require_matching_primary_loss_metric,
 )
 from ivsurf.workflow import resolve_workflow_run_paths
 
@@ -139,6 +140,10 @@ def main(
         raw_config.manifests_dir,
         hpo_profile_name=hpo_profile.profile_name,
         model_names=TUNABLE_MODEL_NAMES,
+    )
+    require_matching_primary_loss_metric(
+        tuning_results.values(),
+        expected_primary_loss_metric=metrics_config.primary_loss_metric,
     )
     clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
 

@@ -449,6 +449,7 @@ def main(
         model_name=model_name,
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
+        primary_loss_metric=metrics_config.primary_loss_metric,
         best_value=float(study.best_value),
         best_params=dict(study.best_params),
         n_trials_requested=hpo_profile.n_trials,

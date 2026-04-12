@@ -6,7 +6,9 @@ from itertools import pairwise
 from pathlib import Path
 from types import ModuleType
 
+import orjson
 import polars as pl
+import pytest
 from pytest import MonkeyPatch
 
 from ivsurf.calendar import MarketCalendar
@@ -211,6 +213,7 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
     tuning_result = load_tuning_result(manifests_dir / "tuning" / "hpo_test" / "ridge.json")
     assert tuning_result.max_hpo_validation_date == boundary.max_hpo_validation_date
     assert tuning_result.first_clean_test_split_id == boundary.first_clean_test_split_id
+    assert tuning_result.primary_loss_metric == "observed_mse_total_variance"
 
     stage06.main(
         raw_config_path=raw_config_path,
@@ -386,3 +389,128 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
             for quote_date, target_date in observed_pairs.items()
         )
         assert min(observed_pairs) > boundary.max_hpo_validation_date
+
+
+def test_stage06_rejects_stale_tuning_manifests_with_different_primary_loss_metric(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    gold_dir = tmp_path / "data" / "gold"
+    manifests_dir = tmp_path / "data" / "manifests"
+    feature_frame = _feature_frame(row_count=714)
+    gold_dir.mkdir(parents=True)
+    manifests_dir.mkdir(parents=True)
+    feature_frame.write_parquet(gold_dir / "daily_features.parquet")
+
+    walkforward_config = WalkforwardConfig(
+        train_size=504,
+        validation_size=126,
+        test_size=21,
+        step_size=21,
+        expanding_train=True,
+    )
+    splits = build_walkforward_splits(
+        dates=feature_frame["quote_date"].to_list(),
+        config=walkforward_config,
+    )
+    serialize_splits(splits, manifests_dir / "walkforward_splits.json")
+
+    raw_config_path = _write_text(
+        tmp_path / "configs" / "data" / "raw.yaml",
+        (
+            f"raw_options_dir: '{(tmp_path / 'raw').as_posix()}'\n"
+            f"bronze_dir: '{(tmp_path / 'data' / 'bronze').as_posix()}'\n"
+            f"silver_dir: '{(tmp_path / 'data' / 'silver').as_posix()}'\n"
+            f"gold_dir: '{gold_dir.as_posix()}'\n"
+            f"manifests_dir: '{manifests_dir.as_posix()}'\n"
+            'sample_start_date: "2021-01-01"\n'
+            'sample_end_date: "2023-12-31"\n'
+        ),
+    )
+    surface_config_path = _write_text(
+        tmp_path / "configs" / "data" / "surface.yaml",
+        (
+            "moneyness_points: [0.0, 0.1]\n"
+            "maturity_days: [30]\n"
+            'interpolation_order: ["maturity", "moneyness"]\n'
+            "interpolation_cycles: 2\n"
+            "total_variance_floor: 1.0e-8\n"
+            "observed_cell_min_count: 1\n"
+        ),
+    )
+    metrics_config_path = _write_text(
+        tmp_path / "configs" / "eval" / "metrics.yaml",
+        (
+            "positive_floor: 1.0e-8\n"
+            'primary_loss_metric: "observed_mse_total_variance"\n'
+        ),
+    )
+    hpo_profile_config_path = _write_text(
+        tmp_path / "configs" / "workflow" / "hpo_test.yaml",
+        (
+            'profile_name: "hpo_test"\n'
+            "n_trials: 1\n"
+            "tuning_splits_count: 3\n"
+            "seed: 7\n"
+            'sampler: "tpe"\n'
+            "pruner:\n"
+            '  name: "median"\n'
+            "  n_startup_trials: 0\n"
+            "  n_warmup_steps: 0\n"
+            "  interval_steps: 1\n"
+        ),
+    )
+    training_profile_config_path = _write_text(
+        tmp_path / "configs" / "workflow" / "train_test.yaml",
+        (
+            'profile_name: "train_test"\n'
+            "epochs: 1\n"
+            "neural_early_stopping_patience: 1\n"
+            "neural_early_stopping_min_delta: 0.0\n"
+            "lightgbm_early_stopping_rounds: 1\n"
+            "lightgbm_early_stopping_min_delta: 0.0\n"
+            "lightgbm_first_metric_only: true\n"
+        ),
+    )
+
+    stage05 = _load_script_module(
+        repo_root / "scripts" / "05_tune_models.py",
+        "stage05_metric_mismatch",
+    )
+    stage06 = _load_script_module(
+        repo_root / "scripts" / "06_run_walkforward.py",
+        "stage06_metric_mismatch",
+    )
+    monkeypatch.setattr(stage06, "TUNABLE_MODEL_NAMES", ("ridge",))
+
+    stage05.main(
+        model_name="ridge",
+        raw_config_path=raw_config_path,
+        surface_config_path=surface_config_path,
+        metrics_config_path=metrics_config_path,
+        lightgbm_config_path=repo_root / "configs" / "models" / "lightgbm.yaml",
+        neural_config_path=repo_root / "configs" / "models" / "neural_surface.yaml",
+        hpo_profile_config_path=hpo_profile_config_path,
+        training_profile_config_path=training_profile_config_path,
+    )
+
+    tuning_manifest_path = manifests_dir / "tuning" / "hpo_test" / "ridge.json"
+    stale_payload = orjson.loads(tuning_manifest_path.read_bytes())
+    stale_payload["primary_loss_metric"] = "observed_qlike_total_variance"
+    tuning_manifest_path.write_bytes(orjson.dumps(stale_payload, option=orjson.OPT_INDENT_2))
+
+    with pytest.raises(ValueError, match="different primary_loss_metric"):
+        stage06.main(
+            raw_config_path=raw_config_path,
+            surface_config_path=surface_config_path,
+            metrics_config_path=metrics_config_path,
+            ridge_config_path=repo_root / "configs" / "models" / "ridge.yaml",
+            elasticnet_config_path=repo_root / "configs" / "models" / "elasticnet.yaml",
+            har_config_path=repo_root / "configs" / "models" / "har_factor.yaml",
+            lightgbm_config_path=repo_root / "configs" / "models" / "lightgbm.yaml",
+            random_forest_config_path=repo_root / "configs" / "models" / "random_forest.yaml",
+            neural_config_path=repo_root / "configs" / "models" / "neural_surface.yaml",
+            hpo_profile_config_path=hpo_profile_config_path,
+            training_profile_config_path=training_profile_config_path,
+        )

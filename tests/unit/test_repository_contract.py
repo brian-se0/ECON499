@@ -34,7 +34,9 @@ def test_required_committed_config_assets_exist_and_parse() -> None:
 
     raw_config = RawDataConfig.model_validate(load_yaml_config(required_paths[0]))
     cleaning_config = CleaningConfig.model_validate(load_yaml_config(required_paths[1]))
-    production_surface_config = SurfaceGridConfig.model_validate(load_yaml_config(required_paths[2]))
+    production_surface_config = SurfaceGridConfig.model_validate(
+        load_yaml_config(required_paths[2])
+    )
     production_feature_config = FeatureConfig.model_validate(load_yaml_config(required_paths[3]))
     smoke_surface_config = SurfaceGridConfig.model_validate(load_yaml_config(required_paths[4]))
     smoke_feature_config = FeatureConfig.model_validate(load_yaml_config(required_paths[5]))

@@ -176,6 +176,7 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
             model_name="ridge",
             hpo_profile_name="test_hpo",
             training_profile_name="test_train",
+            primary_loss_metric="observed_mse_total_variance",
             best_value=0.1,
             best_params={"alpha": 1.0},
             n_trials_requested=1,

@@ -9,7 +9,7 @@ import numpy as np
 import optuna
 import torch
 from torch import nn
-from torch.nn import functional as F
+from torch.nn import functional
 from torch.utils.data import DataLoader, TensorDataset
 
 from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
@@ -53,7 +53,10 @@ class NeuralSurfaceMLP(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         raw_predictions = cast(torch.Tensor, self.network(features))
-        return cast(torch.Tensor, F.softplus(raw_predictions.to(dtype=torch.float64)))
+        return cast(
+            torch.Tensor,
+            functional.softplus(raw_predictions.to(dtype=torch.float64)),
+        )
 
 
 def _resolve_device(device_name: str) -> torch.device:

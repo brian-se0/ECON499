@@ -4,6 +4,7 @@ from datetime import date
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType
+from typing import cast
 
 import numpy as np
 import optuna
@@ -16,6 +17,7 @@ from ivsurf.training.tuning import (
     TuningResult,
     load_required_tuning_results,
     require_consistent_clean_evaluation_policy,
+    require_matching_primary_loss_metric,
     write_tuning_result,
 )
 
@@ -49,6 +51,7 @@ def test_load_required_tuning_results_reads_profile_specific_manifests(tmp_path:
             model_name="ridge",
             hpo_profile_name="hpo_30_trials",
             training_profile_name="train_30_epochs",
+            primary_loss_metric="observed_mse_total_variance",
             best_value=0.1,
             best_params={"alpha": 1.0},
             n_trials_requested=30,
@@ -68,6 +71,7 @@ def test_load_required_tuning_results_reads_profile_specific_manifests(tmp_path:
             model_name="neural_surface",
             hpo_profile_name="hpo_30_trials",
             training_profile_name="train_30_epochs",
+            primary_loss_metric="observed_mse_total_variance",
             best_value=0.05,
             best_params={"hidden_width": 64, "depth": 2},
             n_trials_requested=30,
@@ -91,10 +95,54 @@ def test_load_required_tuning_results_reads_profile_specific_manifests(tmp_path:
 
     assert tuple(sorted(loaded)) == ("neural_surface", "ridge")
     assert loaded["ridge"].best_params["alpha"] == 1.0
+    assert loaded["ridge"].primary_loss_metric == "observed_mse_total_variance"
     assert loaded["neural_surface"].n_trials_pruned == 12
     policy = require_consistent_clean_evaluation_policy(loaded.values())
     assert policy.max_hpo_validation_date == date(2021, 1, 29)
     assert policy.first_clean_test_split_id == "split_0002"
+    assert (
+        require_matching_primary_loss_metric(
+            loaded.values(),
+            expected_primary_loss_metric="observed_mse_total_variance",
+        )
+        == "observed_mse_total_variance"
+    )
+
+
+def test_require_matching_primary_loss_metric_rejects_stale_metric(tmp_path: Path) -> None:
+    ridge_path = tmp_path / "tuning" / "hpo_30_trials" / "ridge.json"
+    write_tuning_result(
+        TuningResult(
+            model_name="ridge",
+            hpo_profile_name="hpo_30_trials",
+            training_profile_name="train_30_epochs",
+            primary_loss_metric="observed_qlike_total_variance",
+            best_value=0.1,
+            best_params={"alpha": 1.0},
+            n_trials_requested=30,
+            n_trials_completed=30,
+            n_trials_pruned=0,
+            tuning_splits_count=3,
+            max_hpo_validation_date=date(2021, 1, 29),
+            first_clean_test_split_id="split_0002",
+            seed=7,
+            sampler="TPESampler",
+            pruner="MedianPruner",
+        ),
+        ridge_path,
+    )
+
+    loaded = load_required_tuning_results(
+        tmp_path,
+        hpo_profile_name="hpo_30_trials",
+        model_names=("ridge",),
+    )
+
+    with pytest.raises(ValueError, match="different primary_loss_metric"):
+        require_matching_primary_loss_metric(
+            loaded.values(),
+            expected_primary_loss_metric="observed_mse_total_variance",
+        )
 
 
 def test_stage05_uses_the_configured_optuna_sampler() -> None:
@@ -172,6 +220,6 @@ def test_stage05_daily_loss_metric_matches_stage07_daily_aggregation() -> None:
         positive_floor=1.0e-8,
         full_grid_weighting="uniform",
     )
-    expected = float(daily_loss_frame["observed_mse_total_variance"].mean())
+    expected = cast(float, daily_loss_frame["observed_mse_total_variance"].mean())
 
     assert selected_metric == pytest.approx(expected, rel=1.0e-12, abs=1.0e-12)
