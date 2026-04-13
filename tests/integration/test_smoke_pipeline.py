@@ -16,7 +16,7 @@ from ivsurf.config import (
 )
 from ivsurf.features.tabular_dataset import build_daily_feature_dataset
 from ivsurf.models.base import dataset_to_matrices
-from ivsurf.models.no_change import NoChangeSurfaceModel
+from ivsurf.models.naive import NaiveSurfaceModel
 from ivsurf.splits.walkforward import build_walkforward_splits
 from ivsurf.surfaces.aggregation import aggregate_daily_surface
 from ivsurf.surfaces.grid import SurfaceGrid, assign_grid_indices
@@ -131,7 +131,7 @@ def test_end_to_end_smoke_pipeline() -> None:
             expanding_train=True,
         ),
     )
-    model = NoChangeSurfaceModel().fit(
+    model = NaiveSurfaceModel().fit(
         features=matrices.features[:2],
         targets=matrices.targets[:2],
         observed_masks=matrices.observed_masks[:2],

@@ -5,7 +5,7 @@ import pytest
 
 from ivsurf.config import FeatureConfig
 from ivsurf.models.base import ordered_feature_columns
-from ivsurf.models.no_change import validate_no_change_feature_layout
+from ivsurf.models.naive import validate_naive_feature_layout
 
 
 def test_ordered_feature_columns_follow_available_lag_windows() -> None:
@@ -40,13 +40,13 @@ def test_ordered_feature_columns_follow_available_lag_windows() -> None:
         "feature_mask_mean_10_0000",
         "feature_daily_option_count",
     )
-    validate_no_change_feature_layout(
+    validate_naive_feature_layout(
         feature_columns=feature_columns,
         target_columns=("target_total_variance_0000",),
     )
 
 
-def test_feature_config_requires_lag_one_for_no_change_benchmark() -> None:
+def test_feature_config_requires_lag_one_for_naive_benchmark() -> None:
     with pytest.raises(ValueError, match="must include 1"):
         FeatureConfig.model_validate(
             {

@@ -130,7 +130,7 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
 
     loss_summary = pl.DataFrame(
         {
-            "model_name": ["no_change", "good", "bad"],
+            "model_name": ["naive", "good", "bad"],
             "mean_observed_wrmse_total_variance": [0.0500, 0.0400, 0.0800],
             "std_observed_wrmse_total_variance": [0.0050, 0.0040, 0.0060],
             "n_target_dates": [10, 10, 10],
@@ -138,28 +138,28 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
     )
     ranked_loss = build_ranked_loss_table(
         loss_summary=loss_summary,
-        benchmark_model="no_change",
+        benchmark_model="naive",
         metric_column="mean_observed_wrmse_total_variance",
     )
     assert ranked_loss["model_name"][0] == "good"
 
     mcs_table = build_mcs_table(
         {
-            "superior_models": ["good", "no_change"],
+            "superior_models": ["good", "naive"],
             "iterations": [],
             "alpha": 0.10,
             "block_size": 5,
             "bootstrap_reps": 100,
             "procedure_name": "simplified_tmax_elimination",
         },
-        all_models=["no_change", "good", "bad"],
+        all_models=["naive", "good", "bad"],
     )
-    assert mcs_table["model_name"].to_list() == ["good", "no_change", "bad"]
+    assert mcs_table["model_name"].to_list() == ["good", "naive", "bad"]
     assert mcs_table["included_in_simplified_tmax_set"].to_list() == [True, True, False]
 
     hedging_summary = pl.DataFrame(
         {
-            "model_name": ["no_change", "good", "bad"],
+            "model_name": ["naive", "good", "bad"],
             "mean_abs_revaluation_error": [1.20, 0.90, 1.80],
             "mean_squared_revaluation_error": [2.0, 1.5, 3.0],
             "mean_abs_hedged_pnl": [0.60, 0.50, 0.70],
@@ -170,13 +170,13 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
     )
     ranked_hedging = build_ranked_hedging_table(
         hedging_summary=hedging_summary,
-        benchmark_model="no_change",
+        benchmark_model="naive",
     )
     assert ranked_hedging["model_name"][0] == "good"
 
     slice_metric_frame = pl.DataFrame(
         {
-            "model_name": ["no_change", "good", "bad", "no_change", "good", "bad"],
+            "model_name": ["naive", "good", "bad", "naive", "good", "bad"],
             "slice_family": ["maturity"] * 3 + ["moneyness"] * 3,
             "slice_label": ["30d"] * 3 + ["+0.00"] * 3,
             "evaluation_scope": ["observed"] * 6,
@@ -185,7 +185,7 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
     )
     leaders = build_slice_leader_table(
         slice_metric_frame=slice_metric_frame,
-        benchmark_model="no_change",
+        benchmark_model="naive",
         metric_column="wrmse_total_variance",
     )
     assert leaders["best_model_name"].to_list() == ["good", "good"]
@@ -209,7 +209,7 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
         title="Slice Metrics",
         x_label="Slice",
         y_label="WRMSE",
-        include_series=("no_change", "good"),
+        include_series=("naive", "good"),
     )
     assert "<svg" in bar_chart_path.read_text(encoding="utf-8")
     assert "<svg" in line_chart_path.read_text(encoding="utf-8")

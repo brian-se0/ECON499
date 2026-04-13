@@ -19,7 +19,7 @@ from ivsurf.config import (
 from ivsurf.evaluation.forecast_store import write_forecasts
 from ivsurf.exceptions import ModelConvergenceError
 from ivsurf.models.base import dataset_to_matrices
-from ivsurf.models.no_change import validate_no_change_feature_layout
+from ivsurf.models.naive import validate_naive_feature_layout
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
@@ -155,7 +155,7 @@ def main(
         "quote_date"
     )
     matrices = dataset_to_matrices(feature_frame)
-    validate_no_change_feature_layout(
+    validate_naive_feature_layout(
         feature_columns=matrices.feature_columns,
         target_columns=matrices.target_columns,
     )
@@ -207,7 +207,7 @@ def main(
         for model_name, tuning_result in tuning_results.items()
     }
 
-    model_names = ("no_change", *TUNABLE_MODEL_NAMES)
+    model_names = ("naive", *TUNABLE_MODEL_NAMES)
     model_run_metadata: dict[str, dict[str, object]] = {}
     total_steps = len(model_names) * len(clean_splits)
     with create_progress() as progress:
@@ -236,7 +236,7 @@ def main(
                 validation_index = _indices_for_dates(matrices.quote_dates, split.validation_dates)
                 test_index = _indices_for_dates(matrices.quote_dates, split.test_dates)
                 try:
-                    if model_name == "no_change":
+                    if model_name == "naive":
                         fit_index = np.concatenate([train_index, validation_index])
                         model = make_model_from_params(
                             model_name=model_name,

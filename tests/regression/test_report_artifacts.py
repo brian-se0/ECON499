@@ -100,7 +100,7 @@ def _forecast_rows(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     model_scales = {
-        "no_change": 0.96,
+        "naive": 0.96,
         "ridge": 0.995,
         "neural_surface": 1.0,
     }
@@ -114,7 +114,7 @@ def _forecast_rows(
                     + (0.0004 * moneyness_index)
                 )
                 if (
-                    model_name == "no_change"
+                    model_name == "naive"
                     and quote_date == date(2021, 1, 6)
                     and maturity_index == 0
                     and moneyness_index == 0
@@ -236,7 +236,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     dm_results = [
         {
             "loss_metric": "observed_mse_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "ridge",
             "n_obs": 3,
             "mean_loss_a": 0.0024,
@@ -249,7 +249,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         },
         {
             "loss_metric": "observed_mse_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "neural_surface",
             "n_obs": 3,
             "mean_loss_a": 0.0024,
@@ -262,7 +262,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         },
         {
             "loss_metric": "observed_qlike_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "ridge",
             "n_obs": 3,
             "mean_loss_a": 0.029,
@@ -275,7 +275,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
         },
         {
             "loss_metric": "observed_qlike_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "neural_surface",
             "n_obs": 3,
             "mean_loss_a": 0.029,
@@ -295,7 +295,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             [
                 {
                     "loss_metric": "observed_mse_total_variance",
-                    "benchmark_model": "no_change",
+                    "benchmark_model": "naive",
                     "candidate_models": ["ridge", "neural_surface"],
                     "observed_statistic": 2.5,
                     "p_value": 0.04,
@@ -306,7 +306,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
                 },
                 {
                     "loss_metric": "observed_qlike_total_variance",
-                    "benchmark_model": "no_change",
+                    "benchmark_model": "naive",
                     "candidate_models": ["ridge", "neural_surface"],
                     "observed_statistic": 2.3,
                     "p_value": 0.05,
@@ -327,10 +327,10 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
                     "superior_models": ["ridge", "neural_surface"],
                     "iterations": [
                         {
-                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "included_models": ["naive", "ridge", "neural_surface"],
                             "test_statistic": 2.4,
                             "p_value": 0.03,
-                            "eliminated_model": "no_change",
+                            "eliminated_model": "naive",
                         },
                         {
                             "included_models": ["ridge", "neural_surface"],
@@ -349,10 +349,10 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
                     "superior_models": ["ridge", "neural_surface"],
                     "iterations": [
                         {
-                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "included_models": ["naive", "ridge", "neural_surface"],
                             "test_statistic": 2.3,
                             "p_value": 0.04,
-                            "eliminated_model": "no_change",
+                            "eliminated_model": "naive",
                         },
                         {
                             "included_models": ["ridge", "neural_surface"],
@@ -458,7 +458,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
             "loss_metrics:\n"
             '  - "observed_mse_total_variance"\n'
             '  - "observed_qlike_total_variance"\n'
-            'benchmark_model: "no_change"\n'
+            'benchmark_model: "naive"\n'
             'dm_alternative: "greater"\n'
             "dm_max_lag: 0\n"
             "spa_block_size: 3\n"
@@ -473,7 +473,7 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     report_config_path = _write_yaml(
         tmp_path / "report.yaml",
         (
-            'benchmark_model: "no_change"\n'
+            'benchmark_model: "naive"\n'
             "official_loss_metrics:\n"
             '  - "observed_mse_total_variance"\n'
             '  - "observed_qlike_total_variance"\n'

@@ -101,6 +101,6 @@ def test_hedging_config_rejects_removed_spot_assumption_key() -> None:
                 "long_maturity_days": 90,
                 "hedge_maturity_days": 30,
                 "hedge_straddle_moneyness": 0.0,
-                "hedge_spot_assumption": "no_change",
+                "hedge_spot_assumption": "naive",
             }
         )

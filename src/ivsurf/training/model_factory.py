@@ -12,7 +12,7 @@ from ivsurf.models.elasticnet import ElasticNetSurfaceModel
 from ivsurf.models.har_factor import HarFactorSurfaceModel
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
 from ivsurf.models.neural_surface import NeuralSurfaceRegressor
-from ivsurf.models.no_change import NoChangeSurfaceModel
+from ivsurf.models.naive import NaiveSurfaceModel
 from ivsurf.models.random_forest import RandomForestSurfaceModel
 from ivsurf.models.ridge import RidgeSurfaceModel
 
@@ -133,8 +133,8 @@ def make_model_from_params(
 ) -> Any:
     """Construct a model from persisted tuned parameters."""
 
-    if model_name == "no_change":
-        return NoChangeSurfaceModel()
+    if model_name == "naive":
+        return NaiveSurfaceModel()
     if model_name == "ridge":
         return RidgeSurfaceModel(alpha=_float_param(params, "alpha"))
     if model_name == "elasticnet":

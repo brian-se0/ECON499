@@ -182,7 +182,7 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
             "loss_metrics:\n"
             '  - "observed_mse_total_variance"\n'
             '  - "observed_qlike_total_variance"\n'
-            'benchmark_model: "no_change"\n'
+            'benchmark_model: "naive"\n'
             'dm_alternative: "greater"\n'
             "dm_max_lag: 0\n"
             "spa_block_size: 2\n"
@@ -198,7 +198,7 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
     _write_text(
         tmp_path / "configs" / "eval" / "report_artifacts.yaml",
         (
-            'benchmark_model: "no_change"\n'
+            'benchmark_model: "naive"\n'
             "official_loss_metrics:\n"
             '  - "observed_mse_total_variance"\n'
             '  - "observed_qlike_total_variance"\n'

@@ -110,7 +110,7 @@ class FeatureConfig(BaseModel):
             message = "lag_windows must not contain duplicate entries."
             raise ValueError(message)
         if 1 not in values:
-            message = "lag_windows must include 1 to support the mandatory no-change benchmark."
+            message = "lag_windows must include 1 to support the mandatory naive benchmark."
             raise ValueError(message)
         return values
 
@@ -136,7 +136,7 @@ class StatsTestConfig(BaseModel):
         "observed_mse_total_variance",
         "observed_qlike_total_variance",
     )
-    benchmark_model: str = "no_change"
+    benchmark_model: str = "naive"
     dm_alternative: Literal["two-sided", "greater", "less"] = "greater"
     dm_max_lag: int = Field(default=0, ge=0)
     spa_block_size: PositiveInt = 5
@@ -211,7 +211,7 @@ class ReportArtifactsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    benchmark_model: str = "no_change"
+    benchmark_model: str = "naive"
     official_loss_metrics: tuple[str, ...] = (
         "observed_mse_total_variance",
         "observed_qlike_total_variance",

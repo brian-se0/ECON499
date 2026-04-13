@@ -84,7 +84,7 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
     )
 
     ridge_rows = []
-    no_change_rows = []
+    naive_rows = []
     for maturity_index, maturity_days in enumerate((30, 90)):
         for moneyness_index, moneyness_point in enumerate((-0.1, 0.0)):
             common = {
@@ -102,15 +102,15 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
                     "predicted_total_variance": -1.0e-4 if maturity_index == 0 else 0.01,
                 }
             )
-            no_change_rows.append(
+            naive_rows.append(
                 {
-                    "model_name": "no_change",
+                    "model_name": "naive",
                     **common,
                     "predicted_total_variance": 0.008,
                 }
             )
     pl.DataFrame(ridge_rows).write_parquet(forecast_dir / "ridge.parquet")
-    pl.DataFrame(no_change_rows).write_parquet(forecast_dir / "no_change.parquet")
+    pl.DataFrame(naive_rows).write_parquet(forecast_dir / "naive.parquet")
 
     raw_config_path = _write_yaml(
         tmp_path / "raw.yaml",
@@ -137,7 +137,7 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
             "loss_metrics:\n"
             '  - "observed_mse_total_variance"\n'
             '  - "observed_qlike_total_variance"\n'
-            'benchmark_model: "no_change"\n'
+            'benchmark_model: "naive"\n'
             'dm_alternative: "greater"\n'
             "dm_max_lag: 0\n"
             "spa_block_size: 2\n"

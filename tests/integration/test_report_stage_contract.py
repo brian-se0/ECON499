@@ -76,7 +76,7 @@ def _forecast_rows(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     model_scales = {
-        "no_change": 1.02,
+        "naive": 1.02,
         "ridge": 0.995,
         "neural_surface": 1.0,
     }
@@ -210,7 +210,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     dm_results = [
         {
             "loss_metric": "observed_mse_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "ridge",
             "n_obs": 3,
             "mean_loss_a": 0.0022,
@@ -223,7 +223,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
         },
         {
             "loss_metric": "observed_mse_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "neural_surface",
             "n_obs": 3,
             "mean_loss_a": 0.0022,
@@ -236,7 +236,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
         },
         {
             "loss_metric": "observed_qlike_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "ridge",
             "n_obs": 3,
             "mean_loss_a": 0.031,
@@ -249,7 +249,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
         },
         {
             "loss_metric": "observed_qlike_total_variance",
-            "model_a": "no_change",
+            "model_a": "naive",
             "model_b": "neural_surface",
             "n_obs": 3,
             "mean_loss_a": 0.031,
@@ -269,7 +269,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
             [
                 {
                     "loss_metric": "observed_mse_total_variance",
-                    "benchmark_model": "no_change",
+                    "benchmark_model": "naive",
                     "candidate_models": ["ridge", "neural_surface"],
                     "observed_statistic": 2.7,
                     "p_value": 0.04,
@@ -280,7 +280,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
                 },
                 {
                     "loss_metric": "observed_qlike_total_variance",
-                    "benchmark_model": "no_change",
+                    "benchmark_model": "naive",
                     "candidate_models": ["ridge", "neural_surface"],
                     "observed_statistic": 2.5,
                     "p_value": 0.05,
@@ -301,10 +301,10 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
                     "superior_models": ["ridge", "neural_surface"],
                     "iterations": [
                         {
-                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "included_models": ["naive", "ridge", "neural_surface"],
                             "test_statistic": 2.7,
                             "p_value": 0.04,
-                            "eliminated_model": "no_change",
+                            "eliminated_model": "naive",
                         },
                         {
                             "included_models": ["ridge", "neural_surface"],
@@ -323,10 +323,10 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
                     "superior_models": ["ridge", "neural_surface"],
                     "iterations": [
                         {
-                            "included_models": ["no_change", "ridge", "neural_surface"],
+                            "included_models": ["naive", "ridge", "neural_surface"],
                             "test_statistic": 2.5,
                             "p_value": 0.05,
-                            "eliminated_model": "no_change",
+                            "eliminated_model": "naive",
                         },
                         {
                             "included_models": ["ridge", "neural_surface"],
@@ -434,7 +434,7 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     assert "mean_observed_mse_total_variance" in ranked_loss_summary
     assert "mean_observed_qlike_total_variance" in qlike_ranked_loss_summary
     assert "included_in_simplified_tmax_set" in mcs_table
-    assert "no_change,false" in mcs_table
+    assert "naive,false" in mcs_table
     assert "ridge,true" in mcs_table
     assert "Official loss metrics" in report_index
     assert "Primary loss metric: `observed_mse_total_variance`" in report_index

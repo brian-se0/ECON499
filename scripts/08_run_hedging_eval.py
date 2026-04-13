@@ -237,9 +237,9 @@ def main(
             *forecast_paths,
         ],
         extra_metadata={
-            "benchmark_model": "no_change",
+            "benchmark_model": "naive",
             "n_results": results_frame.height,
-            "hedge_spot_assumption": "no_change",
+            "hedge_spot_assumption": "naive",
             "spot_source": "median_valid_active_underlying_price_1545",
             "primary_loss_metric": metrics_config.primary_loss_metric,
             "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),

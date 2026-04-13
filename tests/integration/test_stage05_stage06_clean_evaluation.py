@@ -231,9 +231,9 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
 
     forecast_dir = gold_dir / "forecasts" / "hpo_test__train_test"
     ridge_forecast = pl.read_parquet(forecast_dir / "ridge.parquet")
-    no_change_forecast = pl.read_parquet(forecast_dir / "no_change.parquet")
+    naive_forecast = pl.read_parquet(forecast_dir / "naive.parquet")
 
-    for forecast_frame in (ridge_forecast, no_change_forecast):
+    for forecast_frame in (ridge_forecast, naive_forecast):
         assert set(forecast_frame["quote_date"].to_list()) == expected_clean_quote_dates
         assert (
             min(forecast_frame["quote_date"].to_list()) > boundary.max_hpo_validation_date
@@ -372,9 +372,9 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
 
     forecast_dir = gold_dir / "forecasts" / "hpo_gap_test__train_gap_test"
     ridge_forecast = pl.read_parquet(forecast_dir / "ridge.parquet")
-    no_change_forecast = pl.read_parquet(forecast_dir / "no_change.parquet")
+    naive_forecast = pl.read_parquet(forecast_dir / "naive.parquet")
 
-    for forecast_frame in (ridge_forecast, no_change_forecast):
+    for forecast_frame in (ridge_forecast, naive_forecast):
         unique_pairs = (
             forecast_frame.select("quote_date", "target_date")
             .unique()

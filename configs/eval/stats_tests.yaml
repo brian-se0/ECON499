@@ -1,7 +1,7 @@
 loss_metrics:
   - "observed_mse_total_variance"
   - "observed_qlike_total_variance"
-benchmark_model: "no_change"
+benchmark_model: "naive"
 dm_alternative: "greater"
 dm_max_lag: 0
 spa_block_size: 5

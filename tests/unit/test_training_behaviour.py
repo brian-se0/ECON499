@@ -13,7 +13,7 @@ from ivsurf.exceptions import ModelConvergenceError
 from ivsurf.models.elasticnet import ElasticNetSurfaceModel
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
 from ivsurf.models.neural_surface import NeuralSurfaceRegressor
-from ivsurf.models.no_change import validate_no_change_feature_layout
+from ivsurf.models.naive import validate_naive_feature_layout
 from ivsurf.models.ridge import RidgeSurfaceModel
 from ivsurf.training.model_factory import suggest_model_from_trial
 
@@ -318,7 +318,7 @@ def test_ridge_prediction_returns_unclipped_positive_outputs(
     assert np.allclose(predictions, np.full((2, 2), np.exp(100.0), dtype=np.float64))
 
 
-def test_no_change_feature_layout_guard_accepts_aligned_lag1_surface_columns() -> None:
+def test_naive_feature_layout_guard_accepts_aligned_lag1_surface_columns() -> None:
     target_columns = ("target_total_variance_0000", "target_total_variance_0001")
     feature_columns = (
         "feature_surface_mean_01_0000",
@@ -326,13 +326,13 @@ def test_no_change_feature_layout_guard_accepts_aligned_lag1_surface_columns() -
         "feature_surface_mean_05_0000",
     )
 
-    validate_no_change_feature_layout(
+    validate_naive_feature_layout(
         feature_columns=feature_columns,
         target_columns=target_columns,
     )
 
 
-def test_no_change_feature_layout_guard_rejects_missing_or_reordered_lag1_columns() -> None:
+def test_naive_feature_layout_guard_rejects_missing_or_reordered_lag1_columns() -> None:
     target_columns = ("target_total_variance_0000", "target_total_variance_0001")
     feature_columns = (
         "feature_surface_mean_01_0001",
@@ -341,7 +341,7 @@ def test_no_change_feature_layout_guard_rejects_missing_or_reordered_lag1_column
     )
 
     with pytest.raises(ValueError, match="lag-1 surface features"):
-        validate_no_change_feature_layout(
+        validate_naive_feature_layout(
             feature_columns=feature_columns,
             target_columns=target_columns,
         )

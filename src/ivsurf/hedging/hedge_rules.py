@@ -37,7 +37,7 @@ def compute_delta_vega_hedge(
     hedge_maturity_days: int,
     hedge_straddle_moneyness: float,
 ) -> HedgePortfolio:
-    """Size hedges under the explicit no-change spot assumption for next-day sizing."""
+    """Size hedges under the explicit naive spot assumption for next-day sizing."""
 
     validated_trade_spot = require_positive_spot(
         trade_spot,
