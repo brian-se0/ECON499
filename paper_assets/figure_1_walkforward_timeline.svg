@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620">
+<rect width="100%" height="100%" fill="#fcfbf7"/>
+<text x="40" y="42" font-size="24" font-family="Segoe UI">Walk-Forward Split Timing and Clean Evaluation Boundary</text>
+<text x="40" y="68" font-size="14" font-family="Segoe UI">Representative expanding blocked geometry. Block widths are schematic rather than calendar-proportional.</text>
+
+<rect x="40" y="92" width="1120" height="488" fill="#ffffff" stroke="#d9d3c7"/>
+
+<text x="70" y="164" font-size="16" font-family="Segoe UI">split_0000</text>
+<rect x="210" y="128" width="430" height="54" fill="#e9d8a6" stroke="#7a6f5a"/>
+<rect x="640" y="128" width="210" height="54" fill="#d7ebf2" stroke="#7a6f5a"/>
+<rect x="850" y="128" width="110" height="54" fill="#ee9b00" stroke="#7a6f5a"/>
+<text x="425" y="150" text-anchor="middle" font-size="15" font-family="Segoe UI">Train: 504 trading days</text>
+<text x="425" y="170" text-anchor="middle" font-size="13" font-family="Consolas">2004-02-03 to 2006-02-01</text>
+<text x="745" y="150" text-anchor="middle" font-size="15" font-family="Segoe UI">Validation: 126 days</text>
+<text x="745" y="170" text-anchor="middle" font-size="13" font-family="Consolas">2006-02-02 to 2006-08-02</text>
+<text x="905" y="150" text-anchor="middle" font-size="15" font-family="Segoe UI">Test: 21 days</text>
+<text x="905" y="170" text-anchor="middle" font-size="13" font-family="Consolas">2006-08-03 to 2006-08-31</text>
+
+<text x="70" y="256" font-size="16" font-family="Segoe UI">split_0001</text>
+<rect x="210" y="220" width="455" height="54" fill="#e9d8a6" stroke="#7a6f5a"/>
+<rect x="665" y="220" width="210" height="54" fill="#d7ebf2" stroke="#7a6f5a"/>
+<rect x="875" y="220" width="110" height="54" fill="#ee9b00" stroke="#7a6f5a"/>
+<text x="437" y="242" text-anchor="middle" font-size="15" font-family="Segoe UI">Expanded train: 525 trading days</text>
+<text x="437" y="262" text-anchor="middle" font-size="13" font-family="Consolas">2004-02-03 to 2006-03-03</text>
+<text x="770" y="242" text-anchor="middle" font-size="15" font-family="Segoe UI">Validation: 126 days</text>
+<text x="770" y="262" text-anchor="middle" font-size="13" font-family="Consolas">2006-03-06 to 2006-08-31</text>
+<text x="930" y="242" text-anchor="middle" font-size="15" font-family="Segoe UI">Test: 21 days</text>
+<text x="930" y="262" text-anchor="middle" font-size="13" font-family="Consolas">2006-09-01 to 2006-10-02</text>
+
+<line x1="1015" y1="178" x2="1015" y2="226" stroke="#7a6f5a" stroke-width="2"/>
+<polygon points="1015,226 1009,214 1021,214" fill="#7a6f5a"/>
+<text x="1034" y="205" font-size="14" font-family="Segoe UI">Advance by one 21-day step</text>
+
+<text x="70" y="348" font-size="16" font-family="Segoe UI">split_0002</text>
+<rect x="210" y="312" width="480" height="54" fill="#e9d8a6" stroke="#7a6f5a"/>
+<rect x="690" y="312" width="210" height="54" fill="#d7ebf2" stroke="#7a6f5a"/>
+<rect x="900" y="312" width="150" height="54" fill="#94d2bd" stroke="#7a6f5a"/>
+<text x="450" y="334" text-anchor="middle" font-size="15" font-family="Segoe UI">Expanded train: 546 trading days</text>
+<text x="450" y="354" text-anchor="middle" font-size="13" font-family="Consolas">2004-02-03 to 2006-04-03</text>
+<text x="795" y="334" text-anchor="middle" font-size="15" font-family="Segoe UI">Validation: 126 days</text>
+<text x="795" y="354" text-anchor="middle" font-size="13" font-family="Consolas">2006-04-04 to 2006-10-02</text>
+<text x="975" y="332" text-anchor="middle" font-size="15" font-family="Segoe UI">First clean test</text>
+<text x="975" y="352" text-anchor="middle" font-size="13" font-family="Consolas">2006-10-03 to 2006-10-31</text>
+
+<rect x="210" y="410" width="320" height="76" fill="#fff3cd" stroke="#7a6f5a"/>
+<text x="370" y="438" text-anchor="middle" font-size="16" font-family="Segoe UI">HPO boundary</text>
+<text x="370" y="460" text-anchor="middle" font-size="13" font-family="Segoe UI">Optuna tuning uses the first 3 blocked splits only</text>
+<text x="370" y="478" text-anchor="middle" font-size="13" font-family="Consolas">Max HPO validation date: 2006-10-02</text>
+
+<line x1="530" y1="448" x2="590" y2="448" stroke="#7a6f5a" stroke-width="2"/>
+<polygon points="590,448 578,442 578,454" fill="#7a6f5a"/>
+
+<rect x="590" y="410" width="390" height="76" fill="#d9ead3" stroke="#7a6f5a"/>
+<text x="785" y="438" text-anchor="middle" font-size="16" font-family="Segoe UI">Clean out-of-sample evaluation</text>
+<text x="785" y="460" text-anchor="middle" font-size="13" font-family="Consolas">split_0002 to split_0174</text>
+<text x="785" y="478" text-anchor="middle" font-size="13" font-family="Segoe UI">173 clean splits and 3,633 forecast rows per model</text>
+
+<line x1="210" y1="532" x2="1050" y2="532" stroke="#7a6f5a" stroke-width="2"/>
+<line x1="210" y1="524" x2="210" y2="540" stroke="#7a6f5a" stroke-width="2"/>
+<line x1="690" y1="524" x2="690" y2="540" stroke="#7a6f5a" stroke-width="2"/>
+<line x1="704" y1="524" x2="704" y2="540" stroke="#7a6f5a" stroke-width="2"/>
+<line x1="1050" y1="524" x2="1050" y2="540" stroke="#7a6f5a" stroke-width="2"/>
+<text x="210" y="560" text-anchor="middle" font-size="13" font-family="Consolas">2004-02-03</text>
+<text x="690" y="560" text-anchor="middle" font-size="13" font-family="Consolas">2006-10-02</text>
+<text x="704" y="578" text-anchor="middle" font-size="13" font-family="Consolas">2006-10-03</text>
+<text x="1050" y="560" text-anchor="middle" font-size="13" font-family="Consolas">2021-03-10</text>
+</svg>

@@ -17,12 +17,19 @@ from ivsurf.evaluation.interpolation_sensitivity import (
     build_interpolation_sensitivity_frame,
     summarize_interpolation_sensitivity,
 )
-from ivsurf.reports.figures import write_multi_line_chart, write_ranked_bar_chart
+from ivsurf.reports.figures import (
+    write_ecdf_chart,
+    write_multi_line_chart,
+    write_normalized_log_ranking_chart,
+    write_ranked_bar_chart,
+    write_surface_heatmap,
+)
 from ivsurf.reports.tables import (
     build_mcs_table,
     build_ranked_hedging_table,
     build_ranked_loss_table,
     build_slice_leader_table,
+    build_surface_cell_leader_table,
     frame_to_markdown,
 )
 from ivsurf.reproducibility import sha256_file, write_run_manifest
@@ -191,6 +198,30 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
     assert leaders["best_model_name"].to_list() == ["good", "good"]
     assert "best_model_name" in frame_to_markdown(leaders)
 
+    surface_panel = pl.DataFrame(
+        {
+            "model_name": [
+                "naive",
+                "challenger",
+                "naive",
+                "challenger",
+            ],
+            "maturity_days": [30, 30, 60, 60],
+            "moneyness_point": [0.0, 0.0, 0.1, 0.1],
+            "actual_observed_mask": [True, True, True, True],
+            "actual_completed_total_variance": [0.0100, 0.0100, 0.0200, 0.0200],
+            "predicted_total_variance": [0.0110, 0.0102, 0.0201, 0.0212],
+            "observed_weight": [2.0, 2.0, 1.0, 1.0],
+        }
+    )
+    surface_leaders = build_surface_cell_leader_table(
+        surface_panel,
+        benchmark_model="naive",
+    )
+    assert surface_leaders["best_model_name"].to_list() == ["challenger", "naive"]
+    assert surface_leaders["improvement_vs_benchmark_pct"][0] > 0.0
+    assert surface_leaders["improvement_vs_benchmark_pct"][1] == 0.0
+
     bar_chart_path = write_ranked_bar_chart(
         ranked_loss,
         label_column="model_name",
@@ -211,8 +242,38 @@ def test_diagnostics_and_interpolation_sensitivity(tmp_path: Path) -> None:
         y_label="WRMSE",
         include_series=("naive", "good"),
     )
+    normalized_ranking_path = write_normalized_log_ranking_chart(
+        ranked_loss,
+        label_column="model_name",
+        value_column="mean_observed_wrmse_total_variance",
+        benchmark_label="naive",
+        output_path=tmp_path / "loss_log.svg",
+        title="Loss Ranking Relative to Naive",
+    )
+    heatmap_path = write_surface_heatmap(
+        surface_leaders,
+        x_column="moneyness_point",
+        y_column="maturity_days",
+        winner_column="best_model_name",
+        improvement_column="improvement_vs_benchmark_pct",
+        output_path=tmp_path / "surface_heatmap.svg",
+        title="Best Model by Surface Cell",
+        x_label="Log-moneyness",
+        y_label="Maturity (days)",
+    )
+    ecdf_path = write_ecdf_chart(
+        sensitivity,
+        value_column="rmse_diff",
+        output_path=tmp_path / "sensitivity_ecdf.svg",
+        title="Interpolation Sensitivity ECDF",
+        x_label="RMSE difference",
+        y_label="Empirical CDF",
+    )
     assert "<svg" in bar_chart_path.read_text(encoding="utf-8")
     assert "<svg" in line_chart_path.read_text(encoding="utf-8")
+    assert "naive = 1" in normalized_ranking_path.read_text(encoding="utf-8")
+    assert "challenger" in heatmap_path.read_text(encoding="utf-8")
+    assert "Empirical CDF" in ecdf_path.read_text(encoding="utf-8")
 
 
 def test_write_run_manifest_records_required_fields(tmp_path: Path) -> None:

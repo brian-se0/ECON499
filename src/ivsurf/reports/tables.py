@@ -285,6 +285,112 @@ def build_slice_leader_table(
     )
 
 
+def build_surface_cell_leader_table(
+    panel: pl.DataFrame,
+    *,
+    benchmark_model: str,
+    actual_column: str = "actual_completed_total_variance",
+    predicted_column: str = "predicted_total_variance",
+    weight_column: str = "observed_weight",
+) -> pl.DataFrame:
+    """Summarize the best-performing model at each surface cell under observed-scope MSE."""
+
+    required_columns = (
+        "model_name",
+        "maturity_days",
+        "moneyness_point",
+        "actual_observed_mask",
+        actual_column,
+        predicted_column,
+        weight_column,
+    )
+    missing_columns = [column for column in required_columns if column not in panel.columns]
+    if missing_columns:
+        message = f"Forecast-realization panel is missing required columns: {missing_columns}."
+        raise ValueError(message)
+
+    observed_panel = panel.filter(pl.col("actual_observed_mask"))
+    if observed_panel.is_empty():
+        message = "Surface cell leader table requires at least one observed target cell."
+        raise ValueError(message)
+
+    per_model_cell = (
+        observed_panel.with_columns(
+            (
+                pl.col(weight_column)
+                * (pl.col(predicted_column) - pl.col(actual_column)).pow(2)
+            ).alias("weighted_squared_error")
+        )
+        .group_by(["model_name", "maturity_days", "moneyness_point"])
+        .agg(
+            pl.col("weighted_squared_error").sum().alias("weighted_squared_error_sum"),
+            pl.col(weight_column).sum().alias("weight_sum"),
+            pl.len().alias("n_observed_days"),
+        )
+        .with_columns(
+            pl.when(pl.col("weight_sum") > 0.0)
+            .then(pl.col("weighted_squared_error_sum") / pl.col("weight_sum"))
+            .otherwise(None)
+            .alias("cell_mse")
+        )
+        .sort(["maturity_days", "moneyness_point", "cell_mse", "model_name"])
+    )
+
+    benchmark_rows = (
+        per_model_cell.filter(pl.col("model_name") == benchmark_model)
+        .select(
+            "maturity_days",
+            "moneyness_point",
+            pl.col("cell_mse").alias("benchmark_cell_mse"),
+            pl.col("n_observed_days").alias("benchmark_observed_days"),
+        )
+        .sort(["maturity_days", "moneyness_point"])
+    )
+    if benchmark_rows.is_empty():
+        message = f"Benchmark model {benchmark_model!r} not found in observed cell panel."
+        raise ValueError(message)
+
+    leaders = (
+        per_model_cell.group_by(["maturity_days", "moneyness_point"], maintain_order=True)
+        .agg(
+            pl.col("model_name").first().alias("best_model_name"),
+            pl.col("cell_mse").first().alias("best_cell_mse"),
+            pl.col("n_observed_days").first().alias("n_observed_days"),
+        )
+        .join(
+            benchmark_rows,
+            on=["maturity_days", "moneyness_point"],
+            how="left",
+            validate="1:1",
+        )
+        .with_columns(
+            pl.lit(benchmark_model).alias("benchmark_model"),
+            pl.when(pl.col("benchmark_cell_mse") > 0.0)
+            .then(
+                (
+                    (pl.col("benchmark_cell_mse") - pl.col("best_cell_mse"))
+                    / pl.col("benchmark_cell_mse")
+                )
+                * 100.0
+            )
+            .otherwise(0.0)
+            .alias("improvement_vs_benchmark_pct"),
+        )
+        .sort(["maturity_days", "moneyness_point"])
+    )
+    return leaders.select(
+        "maturity_days",
+        "moneyness_point",
+        "best_model_name",
+        "best_cell_mse",
+        "benchmark_model",
+        "benchmark_cell_mse",
+        "improvement_vs_benchmark_pct",
+        "n_observed_days",
+        "benchmark_observed_days",
+    )
+
+
 def _format_markdown_value(value: Any) -> str:
     if value is None:
         return ""

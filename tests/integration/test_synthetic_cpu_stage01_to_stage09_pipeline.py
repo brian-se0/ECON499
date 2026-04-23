@@ -328,6 +328,9 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
     assert (report_dir / "tables" / "worst_day_drilldown.csv").exists()
     assert (report_dir / "details" / "daily_loss_frame.csv").exists()
     assert (report_dir / "details" / "slice_metric_frame.csv").exists()
+    assert (report_dir / "figures" / "loss_ranking.svg").exists()
+    assert (report_dir / "figures" / "surface_performance_heatmap.svg").exists()
+    assert (report_dir / "figures" / "interpolation_sensitivity_ecdf.svg").exists()
 
     bronze_files = sorted((tmp_path / "data" / "bronze").glob("year=*/*.parquet"))
     assert len(bronze_files) == len(quote_dates)

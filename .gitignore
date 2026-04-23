@@ -47,3 +47,6 @@ data/*
 
 # Notebook checkpoints
 .ipynb_checkpoints/
+
+# Local literature review library
+lit_review/

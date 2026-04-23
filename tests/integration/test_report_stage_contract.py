@@ -430,6 +430,9 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
     mcs_table = (report_dir / "tables" / "mcs_result.csv").read_text(encoding="utf-8")
     report_index = (report_dir / "index.md").read_text(encoding="utf-8")
+    assert (report_dir / "figures" / "loss_ranking.svg").exists()
+    assert (report_dir / "figures" / "surface_performance_heatmap.svg").exists()
+    assert (report_dir / "figures" / "interpolation_sensitivity_ecdf.svg").exists()
 
     assert "mean_observed_mse_total_variance" in ranked_loss_summary
     assert "mean_observed_qlike_total_variance" in qlike_ranked_loss_summary

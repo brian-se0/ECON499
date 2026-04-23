@@ -31,7 +31,13 @@ from ivsurf.evaluation.slice_reports import build_slice_metric_frame
 from ivsurf.io.atomic import write_text_atomic
 from ivsurf.io.parquet import write_csv_frame, write_parquet_frame
 from ivsurf.progress import create_progress
-from ivsurf.reports.figures import write_multi_line_chart, write_ranked_bar_chart
+from ivsurf.reports.figures import (
+    write_ecdf_chart,
+    write_multi_line_chart,
+    write_normalized_log_ranking_chart,
+    write_ranked_bar_chart,
+    write_surface_heatmap,
+)
 from ivsurf.reports.tables import (
     build_dm_results_table,
     build_mcs_table,
@@ -40,6 +46,7 @@ from ivsurf.reports.tables import (
     build_report_overview_markdown,
     build_slice_leader_table,
     build_spa_table,
+    build_surface_cell_leader_table,
     build_tail_risk_table,
     build_worst_day_drilldown_table,
     write_table_artifacts,
@@ -299,10 +306,15 @@ def main(
             hedging_summary=hedging_summary,
             benchmark_model=report_config.benchmark_model,
         )
+        surface_cell_leader_table = build_surface_cell_leader_table(
+            panel=panel,
+            benchmark_model=report_config.benchmark_model,
+        )
         tables: dict[str, pl.DataFrame] = {
             "ranked_hedging_summary": ranked_hedging_table,
             "arbitrage_diagnostic_summary": diagnostic_summary,
             "interpolation_sensitivity_summary": interpolation_summary,
+            "surface_cell_leaders": surface_cell_leader_table,
         }
         all_models = loss_summary["model_name"].to_list()
         for loss_metric in report_config.official_loss_metrics:
@@ -473,9 +485,11 @@ def main(
         )
         expected_figure_paths = [
             figures_dir / "loss_ranking.svg",
+            figures_dir / "surface_performance_heatmap.svg",
             figures_dir / "hedging_ranking.svg",
             figures_dir / "calendar_violation_ranking.svg",
             figures_dir / "interpolation_sensitivity_worst_days.svg",
+            figures_dir / "interpolation_sensitivity_ecdf.svg",
             figures_dir / "maturity_slice_wrmse.svg",
             figures_dir / "moneyness_slice_wrmse.svg",
         ]
@@ -484,13 +498,24 @@ def main(
         else:
             resumer.clear_item("report_figures", output_paths=expected_figure_paths)
             figure_paths = [
-                write_ranked_bar_chart(
+                write_normalized_log_ranking_chart(
                     primary_ranked_loss_table,
                     label_column="model_name",
                     value_column=primary_summary_mean_column,
+                    benchmark_label=report_config.benchmark_model,
                     output_path=figures_dir / "loss_ranking.svg",
-                    title=f"Loss Ranking by mean {report_config.primary_loss_metric}",
-                    top_n=report_config.top_models_per_figure,
+                    title=f"Mean {report_config.primary_loss_metric} relative to {report_config.benchmark_model}",
+                ),
+                write_surface_heatmap(
+                    surface_cell_leader_table,
+                    x_column="moneyness_point",
+                    y_column="maturity_days",
+                    winner_column="best_model_name",
+                    improvement_column="improvement_vs_benchmark_pct",
+                    output_path=figures_dir / "surface_performance_heatmap.svg",
+                    title="Best model by surface cell on observed-scope primary MSE",
+                    x_label="Log-moneyness",
+                    y_label="Maturity (days)",
                 ),
                 write_ranked_bar_chart(
                     ranked_hedging_table,
@@ -515,6 +540,14 @@ def main(
                     output_path=figures_dir / "interpolation_sensitivity_worst_days.svg",
                     title="Worst Interpolation-Order Sensitivity Days",
                     top_n=15,
+                ),
+                write_ecdf_chart(
+                    interpolation_sensitivity,
+                    value_column="rmse_diff",
+                    output_path=figures_dir / "interpolation_sensitivity_ecdf.svg",
+                    title="Interpolation-order sensitivity across quote dates",
+                    x_label="Daily RMSE difference",
+                    y_label="Empirical CDF",
                 ),
                 write_multi_line_chart(
                     slice_metric_frame.filter(
