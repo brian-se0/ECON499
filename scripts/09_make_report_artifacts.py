@@ -30,6 +30,7 @@ from ivsurf.evaluation.interpolation_sensitivity import (
 from ivsurf.evaluation.slice_reports import build_slice_metric_frame
 from ivsurf.io.atomic import write_text_atomic
 from ivsurf.io.parquet import write_csv_frame, write_parquet_frame
+from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress
 from ivsurf.reports.figures import (
     write_ecdf_chart,
@@ -158,6 +159,7 @@ def main(
     report_config_path: Path = Path("configs/eval/report_artifacts.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
     training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    run_profile_name: str | None = None,
     mlflow_tracking_uri: str | None = None,
     mlflow_experiment_name: str = "ivsurf",
 ) -> None:
@@ -177,6 +179,7 @@ def main(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
+        run_profile_name=run_profile_name,
     )
 
     if stats_config.benchmark_model != report_config.benchmark_model:
@@ -213,7 +216,14 @@ def main(
     mcs_result_path = _require_file(stats_dir / "mcs_result.json")
     hedging_results_path = _require_file(hedging_dir / "hedging_results.parquet")
     hedging_summary_path = _require_file(hedging_dir / "hedging_summary.parquet")
-    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    forecast_paths = sorted_artifact_files(workflow_paths.forecast_dir, "*.parquet")
+    forecast_reuse_manifest_paths = []
+    if run_profile_name is not None:
+        forecast_reuse_manifest_path = (
+            raw_config.manifests_dir / "forecast_profile_reuse" / f"{run_profile_name}.json"
+        )
+        if forecast_reuse_manifest_path.exists():
+            forecast_reuse_manifest_paths.append(forecast_reuse_manifest_path)
     resumer = StageResumer(
         state_path=resume_state_path(raw_config.manifests_dir, "09_make_report_artifacts"),
         stage_name="09_make_report_artifacts",
@@ -237,9 +247,11 @@ def main(
                 hedging_results_path,
                 hedging_summary_path,
                 raw_config.manifests_dir / "gold_surface_summary.json",
+                *forecast_reuse_manifest_paths,
                 *forecast_paths,
             ],
             extra_tokens={
+                "run_profile_name": run_profile_name,
                 "workflow_run_label": workflow_paths.run_label,
                 "artifact_schema_version": 2,
             },
@@ -504,7 +516,10 @@ def main(
                     value_column=primary_summary_mean_column,
                     benchmark_label=report_config.benchmark_model,
                     output_path=figures_dir / "loss_ranking.svg",
-                    title=f"Mean {report_config.primary_loss_metric} relative to {report_config.benchmark_model}",
+                    title=(
+                        f"Mean {report_config.primary_loss_metric} "
+                        f"relative to {report_config.benchmark_model}"
+                    ),
                 ),
                 write_surface_heatmap(
                     surface_cell_leader_table,
@@ -638,7 +653,8 @@ def main(
             hedging_results_path,
             hedging_summary_path,
             raw_config.manifests_dir / "gold_surface_summary.json",
-            *sorted(workflow_paths.forecast_dir.glob("*.parquet")),
+            *forecast_reuse_manifest_paths,
+            *forecast_paths,
         ],
         output_artifact_paths=[overview_path, *table_paths, *detail_paths, *figure_paths],
         data_manifest_paths=[
@@ -648,12 +664,14 @@ def main(
             hedging_results_path,
             hedging_summary_path,
             raw_config.manifests_dir / "gold_surface_summary.json",
-            *sorted(workflow_paths.forecast_dir.glob("*.parquet")),
+            *forecast_reuse_manifest_paths,
+            *forecast_paths,
         ],
         random_seed=stats_config.bootstrap_seed,
         extra_metadata={
             "report_dir": str(report_dir),
             "top_models_for_figures": list(top_models),
+            "run_profile_name": run_profile_name,
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,
         },

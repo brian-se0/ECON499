@@ -35,8 +35,13 @@ class NeuralSurfaceMLP(nn.Module):
         hidden_width: int,
         depth: int,
         dropout: float,
+        output_total_variance_floor: float,
     ) -> None:
         super().__init__()
+        if output_total_variance_floor <= 0.0:
+            message = "output_total_variance_floor must be strictly positive."
+            raise ValueError(message)
+        self.output_total_variance_floor = output_total_variance_floor
         layers: list[nn.Module] = []
         current_dim = input_dim
         for _ in range(depth):
@@ -55,7 +60,8 @@ class NeuralSurfaceMLP(nn.Module):
         raw_predictions = cast(torch.Tensor, self.network(features))
         return cast(
             torch.Tensor,
-            functional.softplus(raw_predictions.to(dtype=torch.float64)),
+            functional.softplus(raw_predictions.to(dtype=torch.float64))
+            + self.output_total_variance_floor,
         )
 
 
@@ -144,6 +150,7 @@ def _validation_score_and_diagnostics(
     observed_masks: np.ndarray,
     vega_weights: np.ndarray,
     grid_shape: tuple[int, int],
+    moneyness_points: tuple[float, ...],
     metric_name: str,
     positive_floor: float,
 ) -> NeuralValidationDiagnostics:
@@ -176,7 +183,14 @@ def _validation_score_and_diagnostics(
             calendar_monotonicity_penalty(prediction_tensor, grid_shape).detach().cpu().item()
         ),
         convexity_penalty=float(
-            convexity_penalty(prediction_tensor, grid_shape).detach().cpu().item()
+            convexity_penalty(
+                prediction_tensor,
+                grid_shape,
+                moneyness_points=moneyness_points,
+            )
+            .detach()
+            .cpu()
+            .item()
         ),
         roughness_penalty=float(
             roughness_penalty(prediction_tensor, grid_shape).detach().cpu().item()
@@ -190,6 +204,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
 
     config: NeuralModelConfig
     grid_shape: tuple[int, int]
+    moneyness_points: tuple[float, ...]
     model: NeuralSurfaceMLP | None = None
     best_epoch: int | None = None
     epochs_completed: int = 0
@@ -197,6 +212,21 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
     feature_mean: np.ndarray | None = None
     feature_scale: np.ndarray | None = None
     validation_diagnostics: NeuralValidationDiagnostics | None = None
+
+    def __post_init__(self) -> None:
+        if len(self.moneyness_points) != self.grid_shape[1]:
+            message = (
+                "NeuralSurfaceRegressor moneyness_points length must match the "
+                f"moneyness grid size: {len(self.moneyness_points)} != {self.grid_shape[1]}."
+            )
+            raise ValueError(message)
+        moneyness_array = np.asarray(self.moneyness_points, dtype=np.float64)
+        if not np.isfinite(moneyness_array).all():
+            message = "NeuralSurfaceRegressor moneyness_points must be finite."
+            raise ValueError(message)
+        if not np.all(np.diff(moneyness_array) > 0.0):
+            message = "NeuralSurfaceRegressor moneyness_points must be strictly increasing."
+            raise ValueError(message)
 
     def fit(
         self,
@@ -259,6 +289,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
             hidden_width=self.config.hidden_width,
             depth=self.config.depth,
             dropout=self.config.dropout,
+            output_total_variance_floor=self.config.output_total_variance_floor,
         ).to(device)
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -339,7 +370,11 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                     )
                     loss = loss + (
                         self.config.convexity_penalty_weight
-                        * convexity_penalty(predictions, self.grid_shape)
+                        * convexity_penalty(
+                            predictions,
+                            self.grid_shape,
+                            moneyness_points=self.moneyness_points,
+                        )
                     )
                     loss = loss + (
                         self.config.roughness_penalty_weight
@@ -386,6 +421,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                 observed_masks=validation_observed_masks,
                 vega_weights=validation_vega_weights,
                 grid_shape=self.grid_shape,
+                moneyness_points=self.moneyness_points,
                 metric_name=validation_metric_name,
                 positive_floor=validation_positive_floor,
             )
@@ -429,6 +465,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                 observed_masks=validation_observed_masks,
                 vega_weights=validation_vega_weights,
                 grid_shape=self.grid_shape,
+                moneyness_points=self.moneyness_points,
                 metric_name=validation_metric_name,
                 positive_floor=validation_positive_floor,
             )

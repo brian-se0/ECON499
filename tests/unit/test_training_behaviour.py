@@ -12,8 +12,8 @@ from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
 from ivsurf.exceptions import ModelConvergenceError
 from ivsurf.models.elasticnet import ElasticNetSurfaceModel
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
-from ivsurf.models.neural_surface import NeuralSurfaceRegressor
 from ivsurf.models.naive import validate_naive_feature_layout
+from ivsurf.models.neural_surface import NeuralSurfaceRegressor
 from ivsurf.models.ridge import RidgeSurfaceModel
 from ivsurf.training.model_factory import suggest_model_from_trial
 
@@ -89,7 +89,11 @@ def test_neural_training_uses_validation_early_stopping() -> None:
         lightgbm_early_stopping_rounds=3,
         lightgbm_early_stopping_min_delta=0.0,
     )
-    model = NeuralSurfaceRegressor(config=config, grid_shape=(1, 2))
+    model = NeuralSurfaceRegressor(
+        config=config,
+        grid_shape=(1, 2),
+        moneyness_points=(-0.1, 0.0),
+    )
 
     model.fit(
         features=features[:8],
@@ -145,6 +149,7 @@ def test_neural_prediction_reuses_train_window_standardization_and_stays_positiv
             device="cpu",
         ),
         grid_shape=(1, 2),
+        moneyness_points=(-0.1, 0.0),
     )
 
     model.fit(
@@ -265,6 +270,7 @@ def test_lightgbm_tuning_respects_configured_device_type() -> None:
         trial=cast(optuna.Trial, trial),
         target_dim=4,
         grid_shape=(2, 2),
+        moneyness_points=(-0.1, 0.0),
         base_neural_config=NeuralModelConfig(device="cpu"),
         base_lightgbm_params={
             "device_type": "cpu",

@@ -158,6 +158,7 @@ def _objective_factory(
                 trial=trial,
                 target_dim=matrices.targets.shape[1],
                 grid_shape=grid.shape,
+                moneyness_points=grid.moneyness_points,
                 base_neural_config=base_neural_config,
                 base_lightgbm_params=base_lightgbm_params,
             )

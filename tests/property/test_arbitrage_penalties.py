@@ -13,10 +13,12 @@ from ivsurf.models.penalties import calendar_monotonicity_penalty, convexity_pen
     st.floats(min_value=0.001, max_value=0.05),
 )
 def test_quadratic_surface_has_no_penalty(base: float, slope: float, curvature: float) -> None:
-    money = torch.tensor([-1.0, 0.0, 1.0], dtype=torch.float32)
+    money = torch.tensor([-0.30, -0.05, 0.30], dtype=torch.float64)
     maturity = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float32).unsqueeze(1)
-    surface = base + (slope * maturity) + (curvature * money.square())
+    surface = base + (slope * maturity) + (curvature * torch.zeros_like(money))
     flattened = surface.reshape(1, -1)
     assert float(calendar_monotonicity_penalty(flattened, (3, 3))) == 0.0
-    assert float(convexity_penalty(flattened, (3, 3))) == 0.0
-
+    assert (
+        float(convexity_penalty(flattened, (3, 3), moneyness_points=(-0.30, -0.05, 0.30)))
+        == 0.0
+    )

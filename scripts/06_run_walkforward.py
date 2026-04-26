@@ -18,6 +18,7 @@ from ivsurf.config import (
 )
 from ivsurf.evaluation.forecast_store import write_forecasts
 from ivsurf.exceptions import ModelConvergenceError
+from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.models.base import dataset_to_matrices
 from ivsurf.models.naive import validate_naive_feature_layout
 from ivsurf.progress import create_progress
@@ -103,6 +104,8 @@ def main(
     neural_config_path: Path = Path("configs/models/neural_surface.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
     training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    run_profile_name: str | None = None,
+    only_model: str | None = None,
     mlflow_tracking_uri: str | None = None,
     mlflow_experiment_name: str = "ivsurf",
 ) -> None:
@@ -119,6 +122,7 @@ def main(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
+        run_profile_name=run_profile_name,
     )
     split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
     tuning_manifest_paths = [
@@ -147,7 +151,10 @@ def main(
                 split_manifest_path,
                 *tuning_manifest_paths,
             ],
-            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+            extra_tokens={
+                "run_profile_name": run_profile_name,
+                "workflow_run_label": workflow_paths.run_label,
+            },
         ),
     )
 
@@ -208,11 +215,17 @@ def main(
     }
 
     model_names = ("naive", *TUNABLE_MODEL_NAMES)
+    selected_model_names = model_names
+    if only_model is not None:
+        if only_model not in model_names:
+            message = f"Unknown model requested via only_model: {only_model!r}."
+            raise ValueError(message)
+        selected_model_names = (only_model,)
     model_run_metadata: dict[str, dict[str, object]] = {}
-    total_steps = len(model_names) * len(clean_splits)
+    total_steps = len(selected_model_names) * len(clean_splits)
     with create_progress() as progress:
         task_id = progress.add_task("Stage 06 walk-forward forecasting", total=total_steps)
-        for model_name in model_names:
+        for model_name in selected_model_names:
             output_path = workflow_paths.forecast_dir / f"{model_name}.parquet"
             if resumer.item_complete(model_name, required_output_paths=[output_path]):
                 progress.update(
@@ -243,6 +256,7 @@ def main(
                             params={},
                             target_dim=matrices.targets.shape[1],
                             grid_shape=grid.shape,
+                            moneyness_points=grid.moneyness_points,
                             base_neural_config=neural_config,
                         )
                         predictions = fit_and_predict(model, fit_index, test_index, matrices)
@@ -252,6 +266,7 @@ def main(
                             params=tuned_param_map[model_name],
                             target_dim=matrices.targets.shape[1],
                             grid_shape=grid.shape,
+                            moneyness_points=grid.moneyness_points,
                             base_neural_config=neural_config,
                         )
                         if model_name == "lightgbm":
@@ -340,7 +355,7 @@ def main(
                 metadata=item_metadata,
             )
             model_run_metadata[model_name] = item_metadata
-    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    forecast_paths = sorted_artifact_files(workflow_paths.forecast_dir, "*.parquet")
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
         repo_root=Path.cwd(),
@@ -372,10 +387,12 @@ def main(
         split_manifest_path=split_manifest_path,
         random_seed=neural_config.seed,
         extra_metadata={
-            "model_names": list(model_names),
+            "model_names": list(selected_model_names),
+            "only_model": only_model,
             "n_splits": len(clean_splits),
             "hpo_profile_name": hpo_profile.profile_name,
             "training_profile_name": training_profile.profile_name,
+            "run_profile_name": run_profile_name,
             "primary_loss_metric": metrics_config.primary_loss_metric,
             "max_hpo_validation_date": (
                 clean_evaluation_policy.max_hpo_validation_date.isoformat()

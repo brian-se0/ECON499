@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+import numpy as np
 import polars as pl
 
 from ivsurf.surfaces.arbitrage_diagnostics import summarize_diagnostics
@@ -32,6 +33,7 @@ def build_forecast_diagnostic_frame(
     """Compute arbitrage diagnostics for each saved forecast surface."""
 
     rows: list[DiagnosticRow] = []
+    moneyness_points = np.asarray(grid.moneyness_points, dtype=np.float64)
     for group in forecast_frame.partition_by(
         ["model_name", "quote_date", "target_date"],
         maintain_order=True,
@@ -41,7 +43,8 @@ def build_forecast_diagnostic_frame(
                 group,
                 grid,
                 "predicted_total_variance",
-            )
+            ),
+            moneyness_points=moneyness_points,
         )
         rows.append(
             DiagnosticRow(
@@ -64,6 +67,7 @@ def build_actual_diagnostic_frame(
     """Compute the same diagnostics for realized completed surfaces."""
 
     rows: list[DiagnosticRow] = []
+    moneyness_points = np.asarray(grid.moneyness_points, dtype=np.float64)
     for group in actual_surface_frame.partition_by("quote_date", maintain_order=True):
         quote_date = group["quote_date"][0]
         diagnostics = summarize_diagnostics(
@@ -71,7 +75,8 @@ def build_actual_diagnostic_frame(
                 group,
                 grid,
                 "completed_total_variance",
-            )
+            ),
+            moneyness_points=moneyness_points,
         )
         rows.append(
             DiagnosticRow(

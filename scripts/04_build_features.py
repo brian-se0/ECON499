@@ -16,6 +16,7 @@ from ivsurf.config import (
 from ivsurf.exceptions import DataValidationError
 from ivsurf.features.tabular_dataset import build_daily_feature_dataset
 from ivsurf.io.parquet import scan_parquet_files, write_parquet_frame
+from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress, iter_with_progress
 from ivsurf.qc.sample_window import (
     assert_frame_dates_in_sample_window,
@@ -48,7 +49,7 @@ def main(
     walkforward_config = WalkforwardConfig.model_validate(load_yaml_config(walkforward_config_path))
     grid = SurfaceGrid.from_config(surface_config)
 
-    gold_files = sorted(raw_config.gold_dir.glob("year=*/*.parquet"))
+    gold_files = sorted_artifact_files(raw_config.gold_dir, "year=*/*.parquet")
     if not gold_files:
         message = "No gold surface files found. Run scripts/03_build_surfaces.py first."
         raise FileNotFoundError(message)

@@ -26,6 +26,7 @@ from ivsurf.evaluation.alignment import (
 from ivsurf.evaluation.loss_panels import build_daily_loss_frame
 from ivsurf.io.atomic import write_bytes_atomic
 from ivsurf.io.parquet import write_parquet_frame
+from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
@@ -84,6 +85,7 @@ def main(
     stats_config_path: Path = Path("configs/eval/stats_tests.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
     training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    run_profile_name: str | None = None,
     mlflow_tracking_uri: str | None = None,
     mlflow_experiment_name: str = "ivsurf",
 ) -> None:
@@ -99,11 +101,19 @@ def main(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
+        run_profile_name=run_profile_name,
     )
 
     output_dir = workflow_paths.stats_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    forecast_paths = sorted_artifact_files(workflow_paths.forecast_dir, "*.parquet")
+    forecast_reuse_manifest_paths = []
+    if run_profile_name is not None:
+        forecast_reuse_manifest_path = (
+            raw_config.manifests_dir / "forecast_profile_reuse" / f"{run_profile_name}.json"
+        )
+        if forecast_reuse_manifest_path.exists():
+            forecast_reuse_manifest_paths.append(forecast_reuse_manifest_path)
     tuning_manifest_paths = [
         raw_config.manifests_dir / "tuning" / hpo_profile.profile_name / f"{model_name}.json"
         for model_name in TUNABLE_MODEL_NAMES
@@ -127,10 +137,12 @@ def main(
             ],
             input_artifact_paths=[
                 raw_config.manifests_dir / "gold_surface_summary.json",
+                *forecast_reuse_manifest_paths,
                 *tuning_manifest_paths,
                 *forecast_paths,
             ],
             extra_tokens={
+                "run_profile_name": run_profile_name,
                 "workflow_run_label": workflow_paths.run_label,
                 "artifact_schema_version": 2,
             },
@@ -379,12 +391,14 @@ def main(
         ],
         input_artifact_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
+            *forecast_reuse_manifest_paths,
             *tuning_manifest_paths,
             *forecast_paths,
         ],
         output_artifact_paths=output_paths,
         data_manifest_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
+            *forecast_reuse_manifest_paths,
             *tuning_manifest_paths,
             *forecast_paths,
         ],
@@ -395,6 +409,7 @@ def main(
             "mcs_procedure_name": "simplified_tmax_elimination",
             "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
             "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
+            "run_profile_name": run_profile_name,
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,
         },

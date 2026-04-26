@@ -78,9 +78,9 @@ def _forecast_frame(grid: SurfaceGrid) -> pl.DataFrame:
         [0.0125, 0.0120, 0.0126],
     ]
     bad_surface = [
-        [0.0120, 0.0140, 0.0120],
-        [0.0110, 0.0130, 0.0110],
-        [0.0100, 0.0120, 0.0100],
+        [0.0120, 1.0000, 0.0120],
+        [0.0110, 1.0000, 0.0110],
+        [0.0100, 1.0000, 0.0100],
     ]
     rows: list[dict[str, object]] = []
     for model_name, surface in (("good", good_surface), ("bad", bad_surface)):

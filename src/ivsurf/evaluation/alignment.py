@@ -11,6 +11,7 @@ import polars as pl
 
 from ivsurf.evaluation.metrics import total_variance_to_iv, validate_total_variance_array
 from ivsurf.io.parquet import scan_parquet_files
+from ivsurf.io.paths import sorted_artifact_files
 
 
 def _require_files(paths: list[Path], description: str) -> None:
@@ -60,7 +61,7 @@ def _format_spot_contract_violations(
 def load_actual_surface_frame(gold_dir: Path) -> pl.DataFrame:
     """Load persisted daily surface artifacts."""
 
-    gold_files = sorted(gold_dir.glob("year=*/*.parquet"))
+    gold_files = sorted_artifact_files(gold_dir, "year=*/*.parquet")
     _require_files(gold_files, "gold surface")
     return (
         scan_parquet_files(gold_files)
@@ -85,7 +86,7 @@ def load_actual_surface_frame(gold_dir: Path) -> pl.DataFrame:
 def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
     """Load persisted forecast artifacts."""
 
-    forecast_files = sorted(forecast_dir.glob("*.parquet"))
+    forecast_files = sorted_artifact_files(forecast_dir, "*.parquet")
     _require_files(forecast_files, "forecast")
     return (
         scan_parquet_files(forecast_files)
@@ -97,7 +98,7 @@ def load_forecast_frame(forecast_dir: Path) -> pl.DataFrame:
 def load_daily_spot_frame(silver_dir: Path) -> pl.DataFrame:
     """Load the official stage-08 daily spot from valid active_underlying_price_1545 rows."""
 
-    silver_files = sorted(silver_dir.glob("year=*/*.parquet"))
+    silver_files = sorted_artifact_files(silver_dir, "year=*/*.parquet")
     _require_files(silver_files, "silver")
     lazy_frame = scan_parquet_files(silver_files)
     spot_frame = (

@@ -193,6 +193,7 @@ def run_official_smoke(
         raw_config_path=raw_config_path,
         lightgbm_config_path=lightgbm_config_path,
         neural_config_path=neural_config_path,
+        run_profile_name="windows_cuda",
     )
 
     stage01 = _load_script_module(repo_root / "scripts" / "01_ingest_cboe.py", "official_smoke_01")

@@ -17,6 +17,7 @@ from ivsurf.config import (
 )
 from ivsurf.io.atomic import write_bytes_atomic
 from ivsurf.io.parquet import write_parquet_frame
+from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress, iter_with_progress
 from ivsurf.qc.sample_window import require_quote_date_in_sample_window, sample_window_label
 from ivsurf.qc.schema_checks import assert_required_columns
@@ -46,7 +47,7 @@ def main(
     cleaning_config = CleaningConfig.model_validate(load_yaml_config(cleaning_config_path))
     calendar_config = calendar_config_from_raw(raw_config)
 
-    bronze_files = sorted(raw_config.bronze_dir.glob("year=*/*.parquet"))
+    bronze_files = sorted_artifact_files(raw_config.bronze_dir, "year=*/*.parquet")
     if limit is not None:
         bronze_files = bronze_files[:limit]
     resumer = StageResumer(

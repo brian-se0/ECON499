@@ -8,10 +8,17 @@ from pathlib import Path
 from ivsurf.config import RawDataConfig
 
 
-def workflow_run_label(hpo_profile_name: str, training_profile_name: str) -> str:
+def workflow_run_label(
+    hpo_profile_name: str,
+    training_profile_name: str,
+    run_profile_name: str | None = None,
+) -> str:
     """Build a deterministic label for one tuned/trained workflow run."""
 
-    return f"{hpo_profile_name}__{training_profile_name}"
+    base_label = f"{hpo_profile_name}__{training_profile_name}"
+    if run_profile_name is None:
+        return base_label
+    return f"{base_label}__{run_profile_name}"
 
 
 def tuning_manifest_path(manifests_dir: Path, hpo_profile_name: str, model_name: str) -> Path:
@@ -42,12 +49,14 @@ def resolve_workflow_run_paths(
     *,
     hpo_profile_name: str,
     training_profile_name: str,
+    run_profile_name: str | None = None,
 ) -> WorkflowRunPaths:
     """Resolve forecast and evaluation directories for one official profile pair."""
 
     run_label = workflow_run_label(
         hpo_profile_name=hpo_profile_name,
         training_profile_name=training_profile_name,
+        run_profile_name=run_profile_name,
     )
     return WorkflowRunPaths(
         run_label=run_label,

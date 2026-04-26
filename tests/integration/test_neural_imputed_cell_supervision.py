@@ -211,6 +211,7 @@ def test_fit_and_predict_neural_uses_positive_imputed_training_weight(
             roughness_penalty_weight=0.0,
         ),
         grid_shape=(1, 2),
+        moneyness_points=(-0.1, 0.0),
     )
     training_profile = TrainingProfileConfig(
         profile_name="test_train_profile",

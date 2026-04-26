@@ -11,8 +11,8 @@ from ivsurf.config import NeuralModelConfig
 from ivsurf.models.elasticnet import ElasticNetSurfaceModel
 from ivsurf.models.har_factor import HarFactorSurfaceModel
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
-from ivsurf.models.neural_surface import NeuralSurfaceRegressor
 from ivsurf.models.naive import NaiveSurfaceModel
+from ivsurf.models.neural_surface import NeuralSurfaceRegressor
 from ivsurf.models.random_forest import RandomForestSurfaceModel
 from ivsurf.models.ridge import RidgeSurfaceModel
 
@@ -48,6 +48,7 @@ def suggest_model_from_trial(
     trial: optuna.Trial,
     target_dim: int,
     grid_shape: tuple[int, int],
+    moneyness_points: tuple[float, ...],
     base_neural_config: NeuralModelConfig,
     base_lightgbm_params: Mapping[str, object] | None = None,
 ) -> Any:
@@ -118,7 +119,11 @@ def suggest_model_from_trial(
                 ),
             }
         )
-        return NeuralSurfaceRegressor(config=config, grid_shape=grid_shape)
+        return NeuralSurfaceRegressor(
+            config=config,
+            grid_shape=grid_shape,
+            moneyness_points=moneyness_points,
+        )
     message = f"Unsupported model_name for tuning: {model_name}"
     raise ValueError(message)
 
@@ -129,6 +134,7 @@ def make_model_from_params(
     params: Mapping[str, object],
     target_dim: int,
     grid_shape: tuple[int, int],
+    moneyness_points: tuple[float, ...],
     base_neural_config: NeuralModelConfig,
 ) -> Any:
     """Construct a model from persisted tuned parameters."""
@@ -156,6 +162,10 @@ def make_model_from_params(
         return RandomForestSurfaceModel(**dict(params))
     if model_name == "neural_surface":
         config = base_neural_config.model_copy(update=dict(params))
-        return NeuralSurfaceRegressor(config=config, grid_shape=grid_shape)
+        return NeuralSurfaceRegressor(
+            config=config,
+            grid_shape=grid_shape,
+            moneyness_points=moneyness_points,
+        )
     message = f"Unsupported model_name for model construction: {model_name}"
     raise ValueError(message)

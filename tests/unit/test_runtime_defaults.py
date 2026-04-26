@@ -35,6 +35,17 @@ def test_lightgbm_defaults_to_windows_gpu_mode() -> None:
     assert payload["device_type"] == "gpu"
 
 
+def test_mac_lightgbm_profile_is_single_threaded_cpu() -> None:
+    payload = yaml.safe_load(
+        (_repo_root() / "configs" / "models" / "lightgbm.mac_cpu.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert payload["device_type"] == "cpu"
+    assert payload["n_jobs"] == 1
+
+
 def test_raw_data_defaults_include_official_thesis_window() -> None:
     payload = yaml.safe_load(
         (_repo_root() / "configs" / "data" / "raw.yaml").read_text(encoding="utf-8")

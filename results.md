@@ -1,4 +1,39 @@
-# Results Dossier: `hpo_30_trials__train_30_epochs`
+# Results Dossier: Profiled Runs
+
+## Current canonical profile: `hpo_30_trials__train_30_epochs__mac_cpu`
+
+This addendum records the refreshed Mac CPU profile created on 2026-04-26 after
+repairing the nonuniform-grid butterfly-convexity diagnostics and neural penalty.
+The proprietary raw zip source was read from `/Volumes/T9/Options Data`; raw files
+were not modified.
+
+Canonical refreshed artifacts:
+- Report overview: `data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/index.md`
+- Report tables: `data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/tables/`
+- Report detailed frames: `data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/details/`
+- Forecast files: `data/gold/forecasts/hpo_30_trials__train_30_epochs__mac_cpu/`
+- Forecast reuse manifest: `data/manifests/forecast_profile_reuse/mac_cpu.json`
+
+Latest refreshed run manifests:
+- Stage 01: `data/manifests/runs/01_ingest_cboe/20260426T065107Z_01_ingest_cboe.json`
+- Stage 02: `data/manifests/runs/02_build_option_panel/20260426T072825Z_02_build_option_panel.json`
+- Stage 03: `data/manifests/runs/03_build_surfaces/20260426T073017Z_03_build_surfaces.json`
+- Stage 04: `data/manifests/runs/04_build_features/20260426T073437Z_04_build_features.json`
+- Stage 06: `data/manifests/runs/06_run_walkforward/20260426T165740Z_06_run_walkforward.json`
+- Stage 07: `data/manifests/runs/07_run_stats/20260426T165815Z_07_run_stats.json`
+- Stage 08: `data/manifests/runs/08_run_hedging_eval/20260426T170000Z_08_run_hedging_eval.json`
+- Stage 09: `data/manifests/runs/09_make_report_artifacts/20260426T170024Z_09_make_report_artifacts.json`
+
+Key refreshed empirical outputs:
+- Primary observed-cell MSE ranking remains led by `naive` at `0.000025`, followed by `har_factor` at `0.000041` and `random_forest` at `0.000068`.
+- Observed-cell QLIKE remains led by `har_factor` at `0.024208`; refreshed `neural_surface` QLIKE is `2598062.037716`.
+- Conditional surface-revaluation ranking remains led by `naive` at `5.729051`; refreshed `neural_surface` mean absolute revaluation error is `96.935700`.
+- The Mac CPU profile now regenerates `lightgbm` locally with a no-OpenMP LightGBM build. Its refreshed observed-cell MSE is `0.000273`, observed-cell QLIKE is `0.057431`, and mean absolute conditional revaluation error is `10.075435`.
+- Corrected price-convexity diagnostics: `neural_surface` averages `6.809524` calendar violations and `0.074869` butterfly-convexity violations per forecast surface, with magnitudes `0.000157` and `0.024715`.
+
+The full historical Windows/CUDA dossier for `hpo_30_trials__train_30_epochs` is retained below for comparison.
+
+# Historical Results Dossier: `hpo_30_trials__train_30_epochs`
 
 This file is a self-contained export of the saved outputs for the official end-to-end run.
 It is meant to give another model enough information to draft the full paper without reopening the local artifacts.

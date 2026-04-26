@@ -78,6 +78,7 @@ def test_readme_documents_make_as_official_interface() -> None:
     assert "make train-100" in readme
     assert "make clean" in readme
     assert "make clean-train" in readme
+    assert "scripts/install_mac_lightgbm_no_openmp.py" in readme
     assert "Use `make sync-dev` for the official `pipeline` targets" in readme
     assert (
         "The official `pipeline` target runs `make check` and then "

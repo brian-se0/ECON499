@@ -370,6 +370,7 @@ class NeuralModelConfig(BaseModel):
     calendar_penalty_weight: float = Field(default=0.05, ge=0.0)
     convexity_penalty_weight: float = Field(default=0.05, ge=0.0)
     roughness_penalty_weight: float = Field(default=0.005, ge=0.0)
+    output_total_variance_floor: float = Field(default=1.0e-8, gt=0.0)
     device: str = "cuda"
 
 

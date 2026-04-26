@@ -23,6 +23,7 @@ from ivsurf.evaluation.alignment import (
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
 from ivsurf.io.parquet import read_parquet_files, write_parquet_frame
+from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
@@ -49,6 +50,7 @@ def main(
     hedging_config_path: Path = Path("configs/eval/hedging.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
     training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    run_profile_name: str | None = None,
     mlflow_tracking_uri: str | None = None,
     mlflow_experiment_name: str = "ivsurf",
 ) -> None:
@@ -66,9 +68,17 @@ def main(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
+        run_profile_name=run_profile_name,
     )
 
-    forecast_paths = sorted(workflow_paths.forecast_dir.glob("*.parquet"))
+    forecast_paths = sorted_artifact_files(workflow_paths.forecast_dir, "*.parquet")
+    forecast_reuse_manifest_paths = []
+    if run_profile_name is not None:
+        forecast_reuse_manifest_path = (
+            raw_config.manifests_dir / "forecast_profile_reuse" / f"{run_profile_name}.json"
+        )
+        if forecast_reuse_manifest_path.exists():
+            forecast_reuse_manifest_paths.append(forecast_reuse_manifest_path)
     tuning_manifest_paths = [
         raw_config.manifests_dir / "tuning" / hpo_profile.profile_name / f"{model_name}.json"
         for model_name in TUNABLE_MODEL_NAMES
@@ -91,10 +101,14 @@ def main(
             input_artifact_paths=[
                 raw_config.manifests_dir / "gold_surface_summary.json",
                 raw_config.manifests_dir / "silver_build_summary.json",
+                *forecast_reuse_manifest_paths,
                 *tuning_manifest_paths,
                 *forecast_paths,
             ],
-            extra_tokens={"workflow_run_label": workflow_paths.run_label},
+            extra_tokens={
+                "run_profile_name": run_profile_name,
+                "workflow_run_label": workflow_paths.run_label,
+            },
         ),
     )
     tuning_results = load_required_tuning_results(
@@ -226,6 +240,7 @@ def main(
         input_artifact_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
             raw_config.manifests_dir / "silver_build_summary.json",
+            *forecast_reuse_manifest_paths,
             *tuning_manifest_paths,
             *forecast_paths,
         ],
@@ -233,6 +248,7 @@ def main(
         data_manifest_paths=[
             raw_config.manifests_dir / "gold_surface_summary.json",
             raw_config.manifests_dir / "silver_build_summary.json",
+            *forecast_reuse_manifest_paths,
             *tuning_manifest_paths,
             *forecast_paths,
         ],
@@ -244,6 +260,7 @@ def main(
             "primary_loss_metric": metrics_config.primary_loss_metric,
             "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
             "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
+            "run_profile_name": run_profile_name,
             "workflow_run_label": workflow_paths.run_label,
             "resume_context_hash": resumer.context_hash,
         },

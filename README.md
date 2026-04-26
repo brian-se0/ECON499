@@ -19,6 +19,66 @@ The official thesis sample window is `2004-01-02` through `2021-04-09`. This win
 
 The thesis universe is the SPX underlying universe defined by `underlying_symbol == "^SPX"`. That includes both `SPX` and `SPXW` roots whenever they are written on the SPX underlying.
 
+## Hardware Run Profiles
+
+The project has exactly two supported full-run hardware profiles:
+
+- `mac_cpu`: macOS on a MacBook-class machine with CPU-only neural training and a
+  no-OpenMP LightGBM build.
+- `windows_cuda`: Windows with CUDA-enabled PyTorch for the neural model and
+  LightGBM GPU mode.
+
+Running either profile end to end is a valid reproduction route. Running both is
+not required.
+
+Stages `06` through `09` accept an optional `--run-profile-name` argument. When supplied, it becomes part of the forecast, stats, hedging, and report artifact label:
+
+- base label: `hpo_30_trials__train_30_epochs`
+- profiled label: `hpo_30_trials__train_30_epochs__mac_cpu`
+
+The repository includes explicit model hardware profiles:
+
+- Windows/CUDA:
+  - `configs/data/raw.windows.yaml`
+  - `configs/models/neural_surface.windows_cuda.yaml`
+  - `configs/models/lightgbm.windows_cuda.yaml`
+- Mac/non-CUDA:
+  - `configs/data/raw.mac.yaml`
+  - `configs/models/neural_surface.mac_cpu.yaml`
+  - `configs/models/lightgbm.mac_cpu.yaml`
+
+The default Windows-first configs remain CUDA-oriented. The Mac CPU refresh run used:
+
+```bash
+uv sync --extra dev
+uv run python scripts/install_mac_lightgbm_no_openmp.py
+uv run python scripts/check_runtime.py \
+  --raw-config-path configs/data/raw.mac.yaml \
+  --run-profile-name mac_cpu \
+  --neural-config-path configs/models/neural_surface.mac_cpu.yaml \
+  --lightgbm-config-path configs/models/lightgbm.mac_cpu.yaml
+
+uv run python scripts/06_run_walkforward.py \
+  --raw-config-path configs/data/raw.mac.yaml \
+  --run-profile-name mac_cpu \
+  --neural-config-path configs/models/neural_surface.mac_cpu.yaml \
+  --lightgbm-config-path configs/models/lightgbm.mac_cpu.yaml
+uv run python scripts/07_run_stats.py --raw-config-path configs/data/raw.mac.yaml --run-profile-name mac_cpu
+uv run python scripts/08_run_hedging_eval.py --raw-config-path configs/data/raw.mac.yaml --run-profile-name mac_cpu
+uv run python scripts/09_make_report_artifacts.py --raw-config-path configs/data/raw.mac.yaml --run-profile-name mac_cpu
+```
+
+The Mac CPU profile records any carried-forward forecast artifacts in
+`data/manifests/forecast_profile_reuse/mac_cpu.json`; after the no-OpenMP
+LightGBM rerun, only `elasticnet`, `har_factor`, and `random_forest` are carried
+forward by content hash.
+
+The Mac CPU profile intentionally requires LightGBM to be rebuilt from the
+official source package with `USE_OPENMP=OFF`. The stock macOS wheel can load a
+different OpenMP runtime than scikit-learn in the same Python process, which is
+not acceptable for the canonical Mac profile. `scripts/check_runtime.py` rejects
+that unsafe install before a run begins.
+
 ## Official Workflow
 
 `make` is the official interface for running this repository.

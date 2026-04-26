@@ -13,4 +13,4 @@ calendar_penalty_weight: 0.05
 convexity_penalty_weight: 0.05
 roughness_penalty_weight: 0.005
 output_total_variance_floor: 1.0e-8
-device: "cuda"
+device: "cpu"

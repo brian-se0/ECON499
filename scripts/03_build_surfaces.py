@@ -13,6 +13,7 @@ from ivsurf.config import RawDataConfig, SurfaceGridConfig, load_yaml_config
 from ivsurf.evaluation.metrics import total_variance_to_iv
 from ivsurf.io.atomic import write_bytes_atomic
 from ivsurf.io.parquet import write_parquet_frame
+from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress, iter_with_progress
 from ivsurf.qc.sample_window import require_quote_date_in_sample_window, sample_window_label
 from ivsurf.qc.schema_checks import assert_required_columns
@@ -46,7 +47,7 @@ def main(
     surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
     grid = SurfaceGrid.from_config(surface_config)
 
-    silver_files = sorted(raw_config.silver_dir.glob("year=*/*.parquet"))
+    silver_files = sorted_artifact_files(raw_config.silver_dir, "year=*/*.parquet")
     if limit is not None:
         silver_files = silver_files[:limit]
     resumer = StageResumer(
@@ -135,7 +136,10 @@ def main(
                 interpolation_cycles=surface_config.interpolation_cycles,
                 total_variance_floor=surface_config.total_variance_floor,
             )
-            diagnostics = summarize_diagnostics(completed.completed_total_variance)
+            diagnostics = summarize_diagnostics(
+                completed.completed_total_variance,
+                moneyness_points=np.asarray(grid.moneyness_points, dtype=np.float64),
+            )
             completed_flat = completed.completed_total_variance.reshape(-1)
             completed_iv = total_variance_to_iv(
                 total_variance=completed.completed_total_variance,
