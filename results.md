@@ -13,23 +13,28 @@ Canonical refreshed artifacts:
 - Report detailed frames: `data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/details/`
 - Forecast files: `data/gold/forecasts/hpo_30_trials__train_30_epochs__mac_cpu/`
 - Forecast reuse manifest: `data/manifests/forecast_profile_reuse/mac_cpu.json`
+- Provenance supplement: `provenance/hpo_30_trials__train_30_epochs__mac_cpu.json`
+- Reviewer-readable neural tuning diagnostics: `provenance/tuning_diagnostics/`
 
 Latest refreshed run manifests:
 - Stage 01: `data/manifests/runs/01_ingest_cboe/20260426T065107Z_01_ingest_cboe.json`
 - Stage 02: `data/manifests/runs/02_build_option_panel/20260426T072825Z_02_build_option_panel.json`
 - Stage 03: `data/manifests/runs/03_build_surfaces/20260426T073017Z_03_build_surfaces.json`
 - Stage 04: `data/manifests/runs/04_build_features/20260426T073437Z_04_build_features.json`
-- Stage 06: `data/manifests/runs/06_run_walkforward/20260426T165740Z_06_run_walkforward.json`
-- Stage 07: `data/manifests/runs/07_run_stats/20260426T165815Z_07_run_stats.json`
-- Stage 08: `data/manifests/runs/08_run_hedging_eval/20260426T170000Z_08_run_hedging_eval.json`
-- Stage 09: `data/manifests/runs/09_make_report_artifacts/20260426T170024Z_09_make_report_artifacts.json`
+- Stage 05 neural retune: `data/manifests/runs/05_tune_models/20260426T171600Z_05_tune_models.json`
+- Stage 06: `data/manifests/runs/06_run_walkforward/20260426T190250Z_06_run_walkforward.json`
+- Stage 07: `data/manifests/runs/07_run_stats/20260426T190337Z_07_run_stats.json`
+- Stage 08: `data/manifests/runs/08_run_hedging_eval/20260426T190517Z_08_run_hedging_eval.json`
+- Stage 09: `data/manifests/runs/09_make_report_artifacts/20260426T190539Z_09_make_report_artifacts.json`
 
 Key refreshed empirical outputs:
-- Primary observed-cell MSE ranking remains led by `naive` at `0.000025`, followed by `har_factor` at `0.000041` and `random_forest` at `0.000068`.
+- Primary observed-cell MSE ranking remains led by `naive` at `0.000025`, followed by `har_factor` at `0.000041` and `random_forest` at `0.000069`.
 - Observed-cell QLIKE remains led by `har_factor` at `0.024208`; refreshed `neural_surface` QLIKE is `2598062.037716`.
 - Conditional surface-revaluation ranking remains led by `naive` at `5.729051`; refreshed `neural_surface` mean absolute revaluation error is `96.935700`.
-- The Mac CPU profile now regenerates `lightgbm` locally with a no-OpenMP LightGBM build. Its refreshed observed-cell MSE is `0.000273`, observed-cell QLIKE is `0.057431`, and mean absolute conditional revaluation error is `10.075435`.
+- The Mac CPU profile now regenerates all seven forecasts locally. `lightgbm` uses a no-OpenMP LightGBM build; its refreshed observed-cell MSE is `0.000273`, observed-cell QLIKE is `0.057431`, and mean absolute conditional revaluation error is `10.075435`.
+- The refreshed `random_forest` observed-cell MSE is `0.000069`, observed-cell QLIKE is `0.029269`, and mean absolute conditional revaluation error is `7.898828`.
 - Corrected price-convexity diagnostics: `neural_surface` averages `6.809524` calendar violations and `0.074869` butterfly-convexity violations per forecast surface, with magnitudes `0.000157` and `0.024715`.
+- The provenance supplement records `4,347` raw-option checksums, `4,347` bronze files, `4,347` silver files, `4,347` daily gold surface files, `7` forecast files, and the refreshed report/checksum bundle.
 
 The full historical Windows/CUDA dossier for `hpo_30_trials__train_30_epochs` is retained below for comparison.
 
@@ -245,20 +250,19 @@ Additional split facts from `walkforward_splits.json`:
 | `har_factor` | `0.00011388628600664281` | `n_factors=9`, `alpha=6.644070263467316` | `14` | `16` |
 | `lightgbm` | `0.00012129157327578915` | `n_estimators=400`, `learning_rate=0.11962323112686886`, `num_leaves=21`, `max_depth=3`, `min_child_samples=20`, `feature_fraction=0.8655344460953254`, `lambda_l2=0.1024333825675971`, `n_factors=9` | `22` | `8` |
 | `random_forest` | `0.00012688219090806608` | `n_estimators=400`, `max_depth=10`, `min_samples_leaf=1` | `19` | `11` |
-| `neural_surface` | `0.0009115835487545474` | `hidden_width=384`, `depth=2`, `dropout=0.10712118850586368`, `learning_rate=0.00422336970502679`, `weight_decay=5.138298522573402e-05`, `batch_size=128`, `calendar_penalty_weight=0.006503132708010469`, `convexity_penalty_weight=1.0627295606594362e-05`, `roughness_penalty_weight=0.00035852333027431416` | `9` | `21` |
+| `neural_surface` | `0.0009101158672406145` | `hidden_width=384`, `depth=2`, `dropout=0.10712118850586368`, `learning_rate=0.00422336970502679`, `weight_decay=5.138298522573402e-05`, `batch_size=128`, `calendar_penalty_weight=0.006503132708010469`, `convexity_penalty_weight=1.0627295606594362e-05`, `roughness_penalty_weight=0.00035852333027431416` | `14` | `16` |
 
 ### Tuning-diagnostics notes that matter for interpretation
 
 These are derived from the saved stage-05 diagnostics parquet files.
 
 - `neural_surface` tuning diagnostics:
-  - completed split rows: `27`
-  - pruned split rows: `21`
-  - median selected metric value: `0.0009240862003406462`
-  - median running mean selected metric: `0.0008948484630641971`
-  - median prediction/target ratio: `0.031044738622147343`
-  - median share of predictions below `1e-6`: `0.7056633352929649`
-  - median best epoch: `1`
+  - completed split rows: `42`
+  - pruned split rows: `16`
+  - median selected metric value: `0.0009463360888203731`
+  - median prediction/target ratio: `0.04517458404633791`
+  - median share of predictions below `1e-6`: `0.6775426219870664`
+  - median best epoch: `2`
 - `ridge` tuning diagnostics:
   - completed split rows: `39`
   - pruned split rows: `17`

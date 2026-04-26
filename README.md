@@ -69,9 +69,16 @@ uv run python scripts/09_make_report_artifacts.py --raw-config-path configs/data
 ```
 
 The Mac CPU profile records any carried-forward forecast artifacts in
-`data/manifests/forecast_profile_reuse/mac_cpu.json`; after the no-OpenMP
-LightGBM rerun, only `elasticnet`, `har_factor`, and `random_forest` are carried
-forward by content hash.
+`data/manifests/forecast_profile_reuse/mac_cpu.json`. In the refreshed
+2026-04-26 canonical Mac run, all seven model forecasts were regenerated
+locally and `reused_models` is empty.
+
+The refreshed Mac run also writes a checksum supplement at
+`provenance/hpo_30_trials__train_30_epochs__mac_cpu.json`, covering raw zips,
+bronze/silver/gold daily artifacts, forecasts, stats, hedging outputs, report
+artifacts, tuning manifests, and run manifests.
+The reviewer-readable neural tuning diagnostics behind the paper medians are
+exported under `provenance/tuning_diagnostics/`.
 
 The Mac CPU profile intentionally requires LightGBM to be rebuilt from the
 official source package with `USE_OPENMP=OFF`. The stock macOS wheel can load a

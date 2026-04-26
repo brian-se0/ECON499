@@ -44,7 +44,7 @@ def _iter_files(root: Path, pattern: str = "*") -> list[Path]:
 
 def _compact_record(path: Path, *, base: Path | None = None) -> CompactArtifactRecord:
     stat = path.stat()
-    display_path = str(path if base is None else path.relative_to(base))
+    display_path = str(path if base is None else path.resolve().relative_to(base.resolve()))
     return CompactArtifactRecord(
         path=display_path,
         sha256=sha256_file(path),
@@ -70,6 +70,22 @@ def _git_output(args: list[str], repo_root: Path) -> str | None:
     except (CalledProcessError, FileNotFoundError):
         return None
     return result.stdout.strip()
+
+
+def _git_diff_ignoring_crlf_is_clean(repo_root: Path) -> bool | None:
+    try:
+        result = run(
+            ["git", "diff", "--ignore-cr-at-eol", "--quiet"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode in (0, 1):
+        return result.returncode == 0
+    return None
 
 
 def _inventory(name: str, paths: Iterable[Path], *, base: Path | None = None) -> dict[str, object]:
@@ -99,8 +115,7 @@ def main(
         load_yaml_config(training_profile_config_path)
     )
     workflow_paths = resolve_workflow_run_paths(
-        raw_config.gold_dir,
-        raw_config.manifests_dir,
+        raw_config,
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
         run_profile_name=run_profile_name,
@@ -179,6 +194,7 @@ def main(
         "run_profile_name": run_profile_name,
         "git_commit_hash": _git_output(["git", "rev-parse", "HEAD"], repo_root),
         "git_status_porcelain": _git_output(["git", "status", "--short"], repo_root),
+        "semantic_diff_ignoring_crlf_is_clean": _git_diff_ignoring_crlf_is_clean(repo_root),
         "raw_options_dir": str(raw_config.raw_options_dir),
         "sample_start_date": raw_config.sample_start_date.isoformat(),
         "sample_end_date": raw_config.sample_end_date.isoformat(),
