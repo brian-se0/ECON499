@@ -150,7 +150,7 @@ The flagship neural model is a compact multilayer perceptron that predicts the f
 
 The saved official hyperparameters are reported in Appendix Table A1 and are also pinned down by the serialized tuning artifacts. They are fixed before the clean evaluation sample is summarized in the results that follow.
 
-The report artifacts cited in the tables and figures use run profile `hpo_30_trials__train_30_epochs__mac_cpu`. This profile reruns the raw-to-feature chain from `/Volumes/T9/Options Data`, regenerates `naive`, `ridge`, `neural_surface`, and `lightgbm` in the Mac profile directory, and recomputes stages 07 through 09. The local Mac LightGBM forecast is generated with a no-OpenMP LightGBM 4.6.0 build and `n_jobs = 1`, which avoids the native OpenMP-runtime conflict observed with the stock macOS wheel. The profile also records `data/manifests/forecast_profile_reuse/mac_cpu.json`: `elasticnet`, `har_factor`, and `random_forest` are carried forward by content hash from the prior forecast bundle.
+The report artifacts cited in the tables and figures use run profile `hpo_30_trials__train_30_epochs__mac_cpu`. This profile reruns the raw-to-feature chain from `/Volumes/T9/Options Data`, regenerates all seven model forecasts in the Mac profile directory, and recomputes stages 07 through 09. The local Mac LightGBM forecast is generated with a no-OpenMP LightGBM 4.6.0 build and `n_jobs = 1`, which avoids the native OpenMP-runtime conflict observed with the stock macOS wheel. The profile also records `data/manifests/forecast_profile_reuse/mac_cpu.json`, whose `reused_models` list is empty for the refreshed canonical Mac run.
 
 ## Walk-Forward Design, Tuning, and Evaluation
 
