@@ -4,7 +4,7 @@
 
 This thesis develops and evaluates a research-grade, leak-free forecasting pipeline for the SPX implied-volatility surface using raw Cboe 15:45 option data. The official sample spans 4,347 trading days from `2004-01-02` through `2021-04-09`. Raw daily `UnderlyingOptionsEODCalcs_*.zip` files are ingested under explicit schema validation, filtered early to the `^SPX` underlying universe, cleaned with logged rule-based quality flags, and transformed into daily 9×9 total-variance surfaces over fixed log-moneyness and maturity grids. The resulting supervised dataset contains 4,325 daily feature rows and 898 columns, with next-observed-session alignment, preserved target-day observed-cell masks, and explicit split manifests. Forecasting is evaluated in an expanding blocked walk-forward design with 175 total splits, of which 173 remain as clean out-of-sample evaluation splits after removing windows contaminated by hyperparameter-tuning validation dates. The benchmark universe includes a no-change surface benchmark (`naive` in code), ridge, elastic net, a HAR/factor benchmark, LightGBM, random forest, and an arbitrage-aware neural model, all trained to predict total variance rather than raw implied volatility.
 
-The main empirical result is unambiguous. On the primary official loss, observed-cell MSE in total variance, the no-change surface benchmark is best with a mean loss of 0.000025, ahead of `har_factor` at 0.000041 and `random_forest` at 0.000069. It is also best on the primary tail-risk profile, with a 95th-percentile loss of 0.000055, and best on the report’s conditional surface-revaluation ranking, with mean absolute revaluation error of 5.729051. The HAR/factor benchmark is the strongest learned model: it delivers the best mean observed-cell QLIKE at 0.024208 and the strongest short-maturity completed-grid gains on the primary metric, improving on `naive` by 46.605807%, 38.749967%, and 21.648583% on the 1-day, 7-day, and 14-day maturity slices. But it does not overturn the primary headline. The arbitrage-aware neural model materially underperforms under the saved Mac CPU profile, with mean observed-cell MSE of 0.002981, mean observed-cell QLIKE of 2,598,062.037716, and tuning diagnostics consistent with severe underprediction. The thesis therefore contributes both infrastructure and evidence: once temporal integrity is enforced, persistence is hard to beat in next-session SPX surface forecasting.
+The main empirical result is unambiguous. On the primary official loss, observed-cell MSE in total variance, the no-change surface benchmark is best with a mean loss of 0.000025, ahead of `har_factor` at 0.000041 and `random_forest` at 0.000068. It is also best on the primary tail-risk profile, with a 95th-percentile loss of 0.000055, and best on the report’s conditional surface-revaluation ranking, with mean absolute revaluation error of 5.729051. The HAR/factor benchmark is the strongest learned model: it delivers the best mean observed-cell QLIKE at 0.024208 and the strongest short-maturity completed-grid gains on the primary metric, improving on `naive` by 46.605807%, 38.749967%, and 21.648583% on the 1-day, 7-day, and 14-day maturity slices. But it does not overturn the primary headline. The arbitrage-aware neural model materially underperforms under the saved Mac CPU profile, with mean observed-cell MSE of 0.002981, mean observed-cell QLIKE of 2,598,062.037716, and tuning diagnostics consistent with severe underprediction. The thesis therefore contributes both infrastructure and evidence: once temporal integrity is enforced, persistence is hard to beat in next-session SPX surface forecasting.
 
 ## Introduction
 
@@ -176,11 +176,11 @@ Figure 1 illustrates the walk-forward timing geometry.
 
 ### Primary loss performance
 
-The primary result is clear. On the official observed-cell MSE metric in total variance, the no-change surface benchmark (`naive`) ranks first with mean loss 0.000025. The closest challengers are `har_factor` at 0.000041 and `random_forest` at 0.000069. The remaining models are materially worse, and the log-scaled normalization in Figure 2 makes clear that the gap widens rapidly once one moves beyond those two challengers.
+The primary result is clear. On the official observed-cell MSE metric in total variance, the no-change surface benchmark (`naive`) ranks first with mean loss 0.000025. The closest challengers are `har_factor` at 0.000041 and `random_forest` at 0.000068. The remaining models are materially worse, and the log-scaled normalization in Figure 2 makes clear that the gap widens rapidly once one moves beyond those two challengers.
 
-The persistence result is not driven by a few lucky days. Derived from the saved daily loss frame, `naive` beats `har_factor` on 3,395 of 3,633 target dates, `random_forest` on 3,336 days, `lightgbm` on 3,503 days, `elasticnet` on 3,349 days, and `neural_surface` on 3,631 days. Even `ridge`, which occasionally looks competitive on isolated days, is still worse than `naive` on 3,243 of 3,633 days and loses the average by an enormous margin because of catastrophic outliers. A supplementary aggregation of the same saved daily loss frame also leaves `naive` first on mean completed-grid MSE, so the headline is not an artifact of restricting attention to observed cells.
+The persistence result is not driven by a few lucky days. Derived from the saved daily loss frame, `naive` beats `har_factor` on 3,395 of 3,633 target dates, `random_forest` on 3,304 days, `lightgbm` on 3,499 days, `elasticnet` on 3,349 days, and `neural_surface` on 3,631 days. Even `ridge`, which occasionally looks competitive on isolated days, is still worse than `naive` on 3,243 of 3,633 days and loses the average by an enormous margin because of catastrophic outliers. A supplementary aggregation of the same saved daily loss frame also leaves `naive` first on mean completed-grid MSE, so the headline is not an artifact of restricting attention to observed cells.
 
-The tail-risk evidence points in the same direction. On the primary metric, `naive` has the best 95th-percentile daily loss at 0.000055, compared with 0.000145 for `har_factor`, 0.000216 for `random_forest`, 0.000834 for `lightgbm`, 0.000183 for `elasticnet`, 0.009927 for `neural_surface`, and 0.000170 for `ridge`. `har_factor` and `random_forest` occasionally produce slightly smaller worst single-day losses than `naive`, but they do so while being materially worse at the 90th, 95th, and 99th percentiles. The primary worst-day drilldown reinforces this asymmetry: `naive`’s maximum loss is 0.009466, whereas `neural_surface` reaches 0.034380 and `ridge` reaches 7,312.550531.
+The tail-risk evidence points in the same direction. On the primary metric, `naive` has the best 95th-percentile daily loss at 0.000055, compared with 0.000145 for `har_factor`, 0.000213 for `random_forest`, 0.000765 for `lightgbm`, 0.000183 for `elasticnet`, 0.009927 for `neural_surface`, and 0.000170 for `ridge`. `har_factor` and `random_forest` occasionally produce slightly smaller worst single-day losses than `naive`, but they do so while being materially worse at the 90th, 95th, and 99th percentiles. The primary worst-day drilldown reinforces this asymmetry: `naive`’s maximum loss is 0.009466, whereas `neural_surface` reaches 0.034380 and `ridge` reaches 7,312.550531.
 
 The broader saved comparison tests agree with the ranking. On the primary metric, the block-bootstrap SPA test against the challenger set returns `p = 0.586`, with no superior models by mean. The simplified Tmax model confidence set retains only `naive` at alpha 0.10. Those saved test artifacts support a strong conclusion: within the official leak-free design, no challenger overturns the no-change surface benchmark on the primary loss.
 
@@ -198,15 +198,15 @@ Table 4 reports a compressed primary tail-risk summary.
 | --- | --- | --- | --- | --- | --- |
 | 1 | naive | 0.000025 | 0.000055 | 0.000281 | 0.009466 |
 | 2 | har_factor | 0.000041 | 0.000145 | 0.000410 | 0.008825 |
-| 3 | random_forest | 0.000069 | 0.000216 | 0.000980 | 0.008827 |
-| 4 | lightgbm | 0.000273 | 0.000834 | 0.006338 | 0.018725 |
+| 3 | random_forest | 0.000068 | 0.000213 | 0.000971 | 0.008816 |
+| 4 | lightgbm | 0.000272 | 0.000765 | 0.006422 | 0.018349 |
 | 5 | elasticnet | 0.000631 | 0.000183 | 0.002774 | 0.460190 |
 | 6 | neural_surface | 0.002981 | 0.009927 | 0.016812 | 0.034380 |
 | 7 | ridge | 2.014039 | 0.000170 | 0.008059 | 7312.550531 |
 
 ### Secondary metric and slice behavior
 
-The secondary metric tells a more nuanced story. On observed-cell QLIKE in total variance, the HAR/factor benchmark (`har_factor`) ranks first with mean loss 0.024208. It is followed by `random_forest` at 0.029269, `elasticnet` at 0.034404, `lightgbm` at 0.057431, `ridge` at 1.345556, `naive` at 9.447580, and `neural_surface` at 2,598,062.037716. On this metric, the strongest learned model is therefore not merely competitive but decisively ahead in the mean.
+The secondary metric tells a more nuanced story. On observed-cell QLIKE in total variance, the HAR/factor benchmark (`har_factor`) ranks first with mean loss 0.024208. It is followed by `random_forest` at 0.028975, `elasticnet` at 0.034404, `lightgbm` at 0.060195, `ridge` at 1.345556, `naive` at 9.447580, and `neural_surface` at 2,598,062.037716. On this metric, the strongest learned model is therefore not merely competitive but decisively ahead in the mean.
 
 That mean, however, must be interpreted carefully. `har_factor` does not dominate `naive` day by day. It improves on `naive` on 1,692 of 3,633 target dates and loses on 1,941. The reason the mean nonetheless favors `har_factor` is that `naive` has a handful of very large QLIKE blowups. Its 95th-percentile QLIKE is only 0.061089, but its maximum daily QLIKE reaches 13,624.020964. By contrast, `har_factor` has a 95th percentile of 0.048626 and a maximum of 1.607816. The saved worst-day table shows that the largest `naive` QLIKE episodes occur late in the sample, including target dates `2021-03-02` and `2021-02-25`.
 
@@ -236,7 +236,7 @@ Figure 4 summarizes the slice-level patterns.
 
 ### Hedging performance, arbitrage diagnostics, and the neural model
 
-The hedging results again put `naive` first on the report’s official ranking metric, mean absolute conditional surface-revaluation error. `naive` records 5.729051, followed by `har_factor` at 6.353638, `random_forest` at 7.898828, `lightgbm` at 10.075435, `ridge` at 13.087057, `elasticnet` at 13.671021, and `neural_surface` at 96.935700. On this stylized measure, which revalues surfaces using the realized target-day spot, the no-change surface benchmark is also strongest.
+The hedging results again put `naive` first on the report’s official ranking metric, mean absolute conditional surface-revaluation error. `naive` records 5.729051, followed by `har_factor` at 6.353638, `random_forest` at 7.841045, `lightgbm` at 10.366269, `ridge` at 13.087057, `elasticnet` at 13.671021, and `neural_surface` at 96.935700. On this stylized measure, which revalues surfaces using the realized target-day spot, the no-change surface benchmark is also strongest.
 
 There is one secondary nuance. `har_factor` produces slightly smaller mean absolute hedged PnL than `naive`—2.837992 versus 2.877114—and slightly smaller mean squared hedged PnL—19.927431 versus 20.091176. That is an interesting signal that the HAR/factor benchmark may improve some hedge-stability aspects even when it loses the official revaluation ranking. But it does not reverse the main economic result, because the report’s headline hedging criterion is mean absolute revaluation error, and on that criterion `naive` remains first.
 
@@ -252,8 +252,8 @@ Table 5 reports the compressed hedging ranking.
 | --- | --- | --- | --- |
 | 1 | naive | 5.729051 | 0.000000 |
 | 2 | har_factor | 6.353638 | -10.902102 |
-| 3 | random_forest | 7.898828 | -37.873220 |
-| 4 | lightgbm | 10.075435 | -75.865683 |
+| 3 | random_forest | 7.841045 | -36.864630 |
+| 4 | lightgbm | 10.366269 | -80.942150 |
 | 5 | ridge | 13.087057 | -128.433226 |
 | 6 | elasticnet | 13.671021 | -138.626267 |
 | 7 | neural_surface | 96.935700 | -1592.002645 |
@@ -347,11 +347,11 @@ Appendix material collects reproducibility-heavy tables and diagnostics that mat
 | Model | Stage-05 best value | Selected hyperparameters |
 | --- | --- | --- |
 | `naive` | n/a | Lag-1 completed-surface carry-forward |
-| `ridge` | `0.00011775166321408725` | `alpha=97.2956052631225` |
+| `ridge` | `0.00011775166321408735` | `alpha=97.29560526312258` |
 | `elasticnet` | `0.00011115214657925672` | `alpha=0.06673358872570778`;<br>`l1_ratio=0.8537754503645` |
-| `har_factor` | `0.00011388628600664281` | `n_factors=9`;<br>`alpha=6.644070263467316` |
-| `lightgbm` | `0.00012129157327578915` | `n_estimators=400`;<br>`learning_rate=0.11962323112686886`;<br>`num_leaves=21`;<br>`max_depth=3`;<br>`min_child_samples=20`;<br>`feature_fraction=0.8655344460953254`;<br>`lambda_l2=0.1024333825675971`;<br>`n_factors=9` |
-| `random_forest` | `0.00012688219090806608` | `n_estimators=400`;<br>`max_depth=10`;<br>`min_samples_leaf=1` |
+| `har_factor` | `0.00011388628600664281` | `n_factors=9`;<br>`alpha=6.644070263467311` |
+| `lightgbm` | `0.00012120207876324272` | `n_estimators=400`;<br>`learning_rate=0.19491481545898576`;<br>`num_leaves=24`;<br>`max_depth=4`;<br>`min_child_samples=10`;<br>`feature_fraction=0.992762737090758`;<br>`lambda_l2=0.35817215902887456`;<br>`n_factors=9` |
+| `random_forest` | `0.00012704734053683054` | `n_estimators=400`;<br>`max_depth=12`;<br>`min_samples_leaf=1` |
 
 *Panel B. Neural model.*
 
@@ -364,8 +364,8 @@ Appendix material collects reproducibility-heavy tables and diagnostics that mat
 | model_name | mean_calendar_violation_count | mean_calendar_violation_magnitude | mean_convexity_violation_count | mean_convexity_violation_magnitude | n_surfaces |
 | --- | --- | --- | --- | --- | --- |
 | neural_surface | 6.809524 | 0.000157 | 0.074869 | 0.024715 | 3633 |
-| random_forest | 2.646023 | 0.000338 | 2.229012 | 0.374859 | 3633 |
-| lightgbm | 4.124140 | 0.000516 | 2.133774 | 0.131781 | 3633 |
+| random_forest | 2.874209 | 0.000396 | 2.228186 | 0.366719 | 3633 |
+| lightgbm | 4.137352 | 0.000515 | 2.150564 | 0.147242 | 3633 |
 | har_factor | 4.128269 | 0.000620 | 2.608863 | 0.408626 | 3633 |
 | naive | 3.646023 | 0.005406 | 3.307459 | 1.310745 | 3633 |
 | actual_surface | 3.513228 | 0.006529 | 3.377042 | 1.692889 | 4347 |

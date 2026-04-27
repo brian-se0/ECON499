@@ -17,22 +17,22 @@ Canonical refreshed artifacts:
 - Reviewer-readable neural tuning diagnostics: `provenance/tuning_diagnostics/`
 
 Latest refreshed run manifests:
-- Stage 01: `data/manifests/runs/01_ingest_cboe/20260426T065107Z_01_ingest_cboe.json`
-- Stage 02: `data/manifests/runs/02_build_option_panel/20260426T072825Z_02_build_option_panel.json`
-- Stage 03: `data/manifests/runs/03_build_surfaces/20260426T073017Z_03_build_surfaces.json`
-- Stage 04: `data/manifests/runs/04_build_features/20260426T073437Z_04_build_features.json`
-- Stage 05 neural retune: `data/manifests/runs/05_tune_models/20260426T171600Z_05_tune_models.json`
-- Stage 06: `data/manifests/runs/06_run_walkforward/20260426T190250Z_06_run_walkforward.json`
-- Stage 07: `data/manifests/runs/07_run_stats/20260426T190337Z_07_run_stats.json`
-- Stage 08: `data/manifests/runs/08_run_hedging_eval/20260426T190517Z_08_run_hedging_eval.json`
-- Stage 09: `data/manifests/runs/09_make_report_artifacts/20260426T190539Z_09_make_report_artifacts.json`
+- Stage 01: `data/manifests/runs/01_ingest_cboe/20260426T201428Z_01_ingest_cboe.json`
+- Stage 02: `data/manifests/runs/02_build_option_panel/20260426T204036Z_02_build_option_panel.json`
+- Stage 03: `data/manifests/runs/03_build_surfaces/20260426T204213Z_03_build_surfaces.json`
+- Stage 04: `data/manifests/runs/04_build_features/20260426T204619Z_04_build_features.json`
+- Stage 05 final model tuning: `data/manifests/runs/05_tune_models/20260426T205211Z_05_tune_models.json`
+- Stage 06: `data/manifests/runs/06_run_walkforward/20260426T222344Z_06_run_walkforward.json`
+- Stage 07: `data/manifests/runs/07_run_stats/20260426T222400Z_07_run_stats.json`
+- Stage 08: `data/manifests/runs/08_run_hedging_eval/20260426T222540Z_08_run_hedging_eval.json`
+- Stage 09: `data/manifests/runs/09_make_report_artifacts/20260426T222557Z_09_make_report_artifacts.json`
 
 Key refreshed empirical outputs:
-- Primary observed-cell MSE ranking remains led by `naive` at `0.000025`, followed by `har_factor` at `0.000041` and `random_forest` at `0.000069`.
+- Primary observed-cell MSE ranking remains led by `naive` at `0.000025`, followed by `har_factor` at `0.000041` and `random_forest` at `0.000068`.
 - Observed-cell QLIKE remains led by `har_factor` at `0.024208`; refreshed `neural_surface` QLIKE is `2598062.037716`.
 - Conditional surface-revaluation ranking remains led by `naive` at `5.729051`; refreshed `neural_surface` mean absolute revaluation error is `96.935700`.
-- The Mac CPU profile now regenerates all seven forecasts locally. `lightgbm` uses a no-OpenMP LightGBM build; its refreshed observed-cell MSE is `0.000273`, observed-cell QLIKE is `0.057431`, and mean absolute conditional revaluation error is `10.075435`.
-- The refreshed `random_forest` observed-cell MSE is `0.000069`, observed-cell QLIKE is `0.029269`, and mean absolute conditional revaluation error is `7.898828`.
+- The Mac CPU profile now regenerates all seven forecasts locally. `lightgbm` uses a no-OpenMP LightGBM build; its refreshed observed-cell MSE is `0.000272`, observed-cell QLIKE is `0.060195`, and mean absolute conditional revaluation error is `10.366269`.
+- The refreshed `random_forest` observed-cell MSE is `0.000068`, observed-cell QLIKE is `0.028975`, and mean absolute conditional revaluation error is `7.841045`.
 - Corrected price-convexity diagnostics: `neural_surface` averages `6.809524` calendar violations and `0.074869` butterfly-convexity violations per forecast surface, with magnitudes `0.000157` and `0.024715`.
 - The provenance supplement records `4,347` raw-option checksums, `4,347` bronze files, `4,347` silver files, `4,347` daily gold surface files, `7` forecast files, and the refreshed report/checksum bundle.
 
