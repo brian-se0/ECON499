@@ -64,6 +64,10 @@ from ivsurf.workflow import resolve_workflow_run_paths
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _require_file(path: Path) -> Path:
     if not path.exists():
         message = f"Required artifact is missing: {path}"
@@ -168,7 +172,7 @@ def main(
     mlflow_experiment_name: str = "ivsurf",
 ) -> None:
     started_at = datetime.now(UTC)
-    repo_root = Path.cwd()
+    repo_root = _repo_root()
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
     surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
     hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))

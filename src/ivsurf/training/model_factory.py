@@ -76,6 +76,37 @@ def _reject_extra_params(
         raise ValueError(message)
 
 
+def _factor_upper_bound(
+    *,
+    target_dim: int,
+    max_factor_count: int | None,
+    model_name: str,
+) -> int:
+    upper_bound = target_dim if max_factor_count is None else min(target_dim, max_factor_count)
+    if upper_bound < 2 and model_name in {"har_factor", "lightgbm"}:
+        message = (
+            f"{model_name} tuning requires max_factor_count >= 2; "
+            f"found {upper_bound}."
+        )
+        raise ValueError(message)
+    return upper_bound
+
+
+def _require_suggested_factor_count_in_bounds(
+    *,
+    n_factors: int,
+    upper_bound: int,
+    model_name: str,
+) -> int:
+    if 2 <= n_factors <= upper_bound:
+        return n_factors
+    message = (
+        f"{model_name} tuning suggested n_factors={n_factors}, outside the admissible "
+        f"range [2, {upper_bound}]."
+    )
+    raise ValueError(message)
+
+
 def _lightgbm_params(params: Mapping[str, object]) -> dict[str, object]:
     allowed_keys = {
         "n_factors",
@@ -129,6 +160,7 @@ def suggest_model_from_trial(
     model_name: str,
     trial: optuna.Trial,
     target_dim: int,
+    max_factor_count: int | None = None,
     grid_shape: tuple[int, int],
     moneyness_points: tuple[float, ...],
     base_neural_config: NeuralModelConfig,
@@ -136,6 +168,11 @@ def suggest_model_from_trial(
 ) -> Any:
     """Construct a tunable model by sampling a documented Optuna search space."""
 
+    factor_upper_bound = _factor_upper_bound(
+        target_dim=target_dim,
+        max_factor_count=max_factor_count,
+        model_name=model_name,
+    )
     if model_name == "ridge":
         return RidgeSurfaceModel(alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True))
     if model_name == "elasticnet":
@@ -146,8 +183,13 @@ def suggest_model_from_trial(
             tol=1.0e-4,
         )
     if model_name == "har_factor":
+        n_factors = trial.suggest_int("n_factors", 2, min(12, factor_upper_bound))
         return HarFactorSurfaceModel(
-            n_factors=trial.suggest_int("n_factors", 2, min(12, target_dim)),
+            n_factors=_require_suggested_factor_count_in_bounds(
+                n_factors=n_factors,
+                upper_bound=factor_upper_bound,
+                model_name="har_factor",
+            ),
             alpha=trial.suggest_float("alpha", 1.0e-4, 100.0, log=True),
             target_dim=target_dim,
         )
@@ -165,8 +207,13 @@ def suggest_model_from_trial(
                 "min_child_samples": trial.suggest_int("min_child_samples", 10, 60, step=5),
                 "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
                 "lambda_l2": trial.suggest_float("lambda_l2", 1.0e-4, 10.0, log=True),
-                "n_factors": trial.suggest_int("n_factors", 2, min(12, target_dim)),
             }
+        )
+        n_factors = trial.suggest_int("n_factors", 2, min(12, factor_upper_bound))
+        params["n_factors"] = _require_suggested_factor_count_in_bounds(
+            n_factors=n_factors,
+            upper_bound=factor_upper_bound,
+            model_name="lightgbm",
         )
         return LightGBMSurfaceModel(**_lightgbm_params(params))
     if model_name == "random_forest":

@@ -51,9 +51,25 @@ from ivsurf.workflow import tuning_diagnostics_path, tuning_manifest_path
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _indices_for_dates(all_dates: np.ndarray, subset: tuple[str, ...]) -> np.ndarray:
     lookup = {str(value): index for index, value in enumerate(all_dates)}
     return np.asarray([lookup[item] for item in subset], dtype=np.int64)
+
+
+def _max_factor_count_for_tuning_splits(
+    *,
+    target_dim: int,
+    tuning_splits: list[WalkforwardSplit],
+) -> int:
+    if not tuning_splits:
+        message = "Tuning requires at least one walk-forward split."
+        raise ValueError(message)
+    min_training_rows = min(len(split.train_dates) for split in tuning_splits)
+    return min(target_dim, min_training_rows)
 
 
 def _make_pruner(hpo_profile: HpoProfileConfig) -> optuna.pruners.BasePruner:
@@ -143,6 +159,10 @@ def _objective_factory(
 ) -> Callable[[optuna.Trial], float]:
     def objective(trial: optuna.Trial) -> float:
         scores: list[float] = []
+        max_factor_count = _max_factor_count_for_tuning_splits(
+            target_dim=matrices.targets.shape[1],
+            tuning_splits=tuning_splits,
+        )
         for split_index, split in enumerate(tuning_splits):
             split_id = split.split_id
             train_index = _indices_for_dates(matrices.quote_dates, split.train_dates)
@@ -151,6 +171,7 @@ def _objective_factory(
                 model_name=model_name,
                 trial=trial,
                 target_dim=matrices.targets.shape[1],
+                max_factor_count=max_factor_count,
                 grid_shape=grid.shape,
                 moneyness_points=grid.moneyness_points,
                 base_neural_config=base_neural_config,
@@ -487,7 +508,7 @@ def main(
     )
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="05_tune_models",
         started_at=started_at,
         config_paths=[

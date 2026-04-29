@@ -1,7 +1,8 @@
 profile_name: "train_smoke"
-epochs: 1
-neural_early_stopping_patience: 1
+epochs: 5
+neural_early_stopping_patience: 2
 neural_early_stopping_min_delta: 0.0
+neural_min_epochs_before_early_stop: 2
 lightgbm_early_stopping_rounds: 1
 lightgbm_early_stopping_min_delta: 0.0
 lightgbm_first_metric_only: true

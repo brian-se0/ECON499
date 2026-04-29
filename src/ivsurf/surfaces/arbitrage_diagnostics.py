@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.special import ndtr
+
+FloatArray = NDArray[np.float64]
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +78,7 @@ def _normalized_call_prices(
     sqrt_variance = np.sqrt(total_variance)
     d1 = ((-log_moneyness)[None, :] + (0.5 * total_variance)) / sqrt_variance
     d2 = d1 - sqrt_variance
-    return ndtr(d1) - (strikes[None, :] * ndtr(d2))
+    return cast(FloatArray, ndtr(d1) - (strikes[None, :] * ndtr(d2)))
 
 
 def _second_derivative_nonuniform(values: np.ndarray, coordinates: np.ndarray) -> np.ndarray:
@@ -83,7 +87,7 @@ def _second_derivative_nonuniform(values: np.ndarray, coordinates: np.ndarray) -
     full_spacing = coordinates[2:] - coordinates[:-2]
     left_slope = (values[:, 1:-1] - values[:, :-2]) / left_spacing[None, :]
     right_slope = (values[:, 2:] - values[:, 1:-1]) / right_spacing[None, :]
-    return 2.0 * (right_slope - left_slope) / full_spacing[None, :]
+    return cast(FloatArray, 2.0 * (right_slope - left_slope) / full_spacing[None, :])
 
 
 def convexity_violations(

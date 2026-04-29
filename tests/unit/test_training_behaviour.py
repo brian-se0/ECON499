@@ -350,6 +350,24 @@ def test_lightgbm_tuning_respects_configured_device_type() -> None:
     assert model.n_factors == 3
 
 
+def test_factor_tuning_rejects_trials_above_training_rank_cap() -> None:
+    trial = optuna.trial.FixedTrial({"n_factors": 4, "alpha": 1.0})
+
+    with pytest.warns(UserWarning, match="out of the range"), pytest.raises(
+        ValueError,
+        match="n_factors",
+    ):
+        suggest_model_from_trial(
+            model_name="har_factor",
+            trial=cast(optuna.Trial, trial),
+            target_dim=9,
+            max_factor_count=3,
+            grid_shape=(3, 3),
+            moneyness_points=(-0.1, 0.0, 0.1),
+            base_neural_config=NeuralModelConfig(device="cpu"),
+        )
+
+
 def test_elasticnet_fit_raises_typed_convergence_error_on_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

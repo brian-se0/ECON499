@@ -17,6 +17,10 @@ from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
@@ -101,7 +105,7 @@ def main(
     write_bytes_atomic(manifest_path, orjson.dumps(payload, option=orjson.OPT_INDENT_2))
     run_manifest_path = write_run_manifest(
         manifests_dir=config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="01_ingest_cboe",
         started_at=started_at,
         config_paths=[raw_config_path],

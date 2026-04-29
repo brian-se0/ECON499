@@ -222,9 +222,9 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
             "level_notional: 1.0\n"
             "skew_notional: 1.0\n"
             "calendar_notional: 0.5\n"
-            "skew_moneyness_abs: 0.1\n"
-            "short_maturity_days: 7\n"
-            "long_maturity_days: 30\n"
+            "skew_moneyness_abs: 0.05\n"
+            "short_maturity_days: 30\n"
+            "long_maturity_days: 60\n"
             "hedge_maturity_days: 30\n"
             "hedge_straddle_moneyness: 0.0\n"
         ),
@@ -235,16 +235,17 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
             'profile_name: "hpo_30_trials"\n'
             "n_trials: 1\n"
             "tuning_splits_count: 3\n"
-            "seed: 7\n"
+            "seed: 1\n"
         ),
     )
     _write_text(
         tmp_path / "configs" / "workflow" / "train_30_epochs.yaml",
         (
             'profile_name: "train_30_epochs"\n'
-            "epochs: 1\n"
-            "neural_early_stopping_patience: 1\n"
+            "epochs: 5\n"
+            "neural_early_stopping_patience: 2\n"
             "neural_early_stopping_min_delta: 0.0\n"
+            "neural_min_epochs_before_early_stop: 2\n"
             "lightgbm_early_stopping_rounds: 1\n"
             "lightgbm_early_stopping_min_delta: 0.0\n"
             "lightgbm_first_metric_only: true\n"

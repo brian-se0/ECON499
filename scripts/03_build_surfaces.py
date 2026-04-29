@@ -35,6 +35,10 @@ from ivsurf.surfaces.interpolation import COMPLETED_SURFACE_SCHEMA_VERSION, comp
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _reason_counts(frame: pl.DataFrame, column_name: str) -> dict[str, int]:
     return {
         str(reason): int(count)
@@ -313,7 +317,7 @@ def main(
     ]
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="03_build_surfaces",
         started_at=started_at,
         config_paths=[raw_config_path, surface_config_path],

@@ -33,6 +33,10 @@ from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _invalid_reason_counts(frame: pl.DataFrame) -> dict[str, int]:
     reasons = ["VALID" if reason is None else str(reason) for reason in frame["invalid_reason"]]
     return {reason: int(count) for reason, count in sorted(Counter(reasons).items())}
@@ -145,7 +149,7 @@ def main(
     silver_output_paths = [Path(str(row["silver_path"])) for row in summary_rows]
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="02_build_option_panel",
         started_at=started_at,
         config_paths=[raw_config_path, cleaning_config_path],

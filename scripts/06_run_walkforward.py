@@ -49,6 +49,10 @@ from ivsurf.workflow import resolve_workflow_run_paths, tuning_manifest_path
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _indices_for_dates(all_dates: np.ndarray, subset: tuple[str, ...]) -> np.ndarray:
     lookup = {str(value): index for index, value in enumerate(all_dates)}
     return np.asarray([lookup[item] for item in subset], dtype=np.int64)
@@ -666,7 +670,7 @@ def main(
     forecast_paths = sorted_artifact_files(workflow_paths.forecast_dir, "*.parquet")
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="06_run_walkforward",
         started_at=started_at,
         config_paths=[

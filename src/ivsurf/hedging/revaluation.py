@@ -43,6 +43,28 @@ class SurfaceDomainError(ValueError):
     """Raised when hedging valuation requests a surface coordinate outside the grid."""
 
 
+SURFACE_DOMAIN_ABSOLUTE_TOLERANCE = 1.0e-12
+
+
+def _snap_to_domain_boundary(
+    value: float,
+    *,
+    lower: float,
+    upper: float,
+) -> float | None:
+    """Return a domain-safe coordinate, accepting only boundary roundoff."""
+
+    if not np.isfinite(value):
+        return None
+    if lower <= value <= upper:
+        return value
+    if np.isclose(value, lower, rtol=0.0, atol=SURFACE_DOMAIN_ABSOLUTE_TOLERANCE):
+        return lower
+    if np.isclose(value, upper, rtol=0.0, atol=SURFACE_DOMAIN_ABSOLUTE_TOLERANCE):
+        return upper
+    return None
+
+
 class SurfaceInterpolator:
     """Bilinear interpolator over a completed total-variance surface."""
 
@@ -80,13 +102,18 @@ class SurfaceInterpolator:
         maturity_max = float(self.maturity_days.max())
         moneyness_min = float(self.moneyness_points.min())
         moneyness_max = float(self.moneyness_points.max())
-        if (
-            np.isfinite(query_days)
-            and np.isfinite(query_moneyness)
-            and maturity_min <= query_days <= maturity_max
-            and moneyness_min <= query_moneyness <= moneyness_max
-        ):
-            return query_days, query_moneyness
+        domain_safe_days = _snap_to_domain_boundary(
+            query_days,
+            lower=maturity_min,
+            upper=maturity_max,
+        )
+        domain_safe_moneyness = _snap_to_domain_boundary(
+            query_moneyness,
+            lower=moneyness_min,
+            upper=moneyness_max,
+        )
+        if domain_safe_days is not None and domain_safe_moneyness is not None:
+            return domain_safe_days, domain_safe_moneyness
         context_parts = []
         if model_name is not None:
             context_parts.append(f"model_name={model_name}")
@@ -146,14 +173,14 @@ def surface_interpolator_from_frame(
     ordered = frame.sort(["maturity_index", "moneyness_index"])
     maturity_days = ordered["maturity_days"].unique().sort().to_numpy()
     moneyness_points = ordered["moneyness_point"].unique().sort().to_numpy()
-    grid = ordered[total_variance_column].to_numpy().reshape(
+    total_variance_grid = ordered[total_variance_column].to_numpy().reshape(
         maturity_days.shape[0],
         moneyness_points.shape[0],
     )
     return SurfaceInterpolator(
         maturity_days=maturity_days,
         moneyness_points=moneyness_points,
-        total_variance_grid=grid,
+        total_variance_grid=total_variance_grid,
     )
 
 

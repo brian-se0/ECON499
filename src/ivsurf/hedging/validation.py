@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from math import isclose, isfinite
+from collections.abc import Mapping
+from datetime import date
+from math import isclose, isfinite, log
+from typing import cast
 
 import polars as pl
 
@@ -21,6 +24,7 @@ HEDGING_SUMMARY_COLUMNS = (
     "n_trades",
 )
 HEDGING_SUMMARY_FLOAT_TOLERANCE = 1.0e-12
+HEDGING_DOMAIN_ABSOLUTE_TOLERANCE = 1.0e-12
 
 
 def _require_columns(
@@ -81,9 +85,13 @@ def _require_unique_keys(
 def _values_equal(left: object, right: object) -> bool:
     if left is None or right is None:
         return left is None and right is None
-    if isinstance(left, float) or isinstance(right, float):
-        left_float = float(left)
-        right_float = float(right)
+    left_is_numeric = isinstance(left, int | float) and not isinstance(left, bool)
+    right_is_numeric = isinstance(right, int | float) and not isinstance(right, bool)
+    if left_is_numeric or right_is_numeric:
+        if not (left_is_numeric and right_is_numeric):
+            return False
+        left_float = float(cast(int | float, left))
+        right_float = float(cast(int | float, right))
         if not isfinite(left_float) or not isfinite(right_float):
             return False
         return isclose(
@@ -216,9 +224,41 @@ def _require_value_in_bounds(
 ) -> None:
     if lower <= value <= upper:
         return
+    if isclose(value, lower, rel_tol=0.0, abs_tol=HEDGING_DOMAIN_ABSOLUTE_TOLERANCE):
+        return
+    if isclose(value, upper, rel_tol=0.0, abs_tol=HEDGING_DOMAIN_ABSOLUTE_TOLERANCE):
+        return
     message = (
         f"Hedging config {field_name}={value!r} is outside the surface grid domain "
         f"[{lower!r}, {upper!r}]."
+    )
+    raise ValueError(message)
+
+
+def _format_date_for_message(value: object) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+    return repr(value)
+
+
+def _require_positive_spot_value(
+    value: object,
+    *,
+    field_name: str,
+    date_value: object,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        message = (
+            f"Hedging spot path validation requires numeric {field_name} for "
+            f"{_format_date_for_message(date_value)}; got {value!r}."
+        )
+        raise ValueError(message)
+    spot = float(value)
+    if isfinite(spot) and spot > 0.0:
+        return spot
+    message = (
+        f"Hedging spot path validation requires finite positive {field_name} for "
+        f"{_format_date_for_message(date_value)}; got {spot!r}."
     )
     raise ValueError(message)
 
@@ -267,3 +307,89 @@ def require_hedging_config_in_surface_domain(
             upper=moneyness_max,
             field_name=field_name,
         )
+
+
+def require_hedging_spot_paths_in_surface_domain(
+    hedging_config: HedgingConfig,
+    grid: SurfaceGrid,
+    *,
+    forecast_frame: pl.DataFrame,
+    spot_lookup: Mapping[object, float],
+) -> None:
+    """Fail if carried hedging-book strikes can leave the surface moneyness domain."""
+
+    _require_non_null_columns(
+        forecast_frame,
+        columns=("quote_date", "target_date"),
+        artifact_name="Forecast artifacts",
+    )
+    forecast_paths = forecast_frame.select(["quote_date", "target_date"]).unique().sort(
+        ["quote_date", "target_date"]
+    )
+    if forecast_paths.is_empty():
+        message = "Forecast artifacts must contain at least one quote/target path."
+        raise ValueError(message)
+    moneyness_min = float(min(grid.moneyness_points))
+    moneyness_max = float(max(grid.moneyness_points))
+    for row in forecast_paths.iter_rows(named=True):
+        quote_date = row["quote_date"]
+        target_date = row["target_date"]
+        if quote_date not in spot_lookup or target_date not in spot_lookup:
+            message = (
+                "Hedging spot path validation is missing spot state for "
+                f"quote_date={_format_date_for_message(quote_date)} or "
+                f"target_date={_format_date_for_message(target_date)}."
+            )
+            raise ValueError(message)
+        quote_spot = _require_positive_spot_value(
+            spot_lookup[quote_date],
+            field_name="quote_spot",
+            date_value=quote_date,
+        )
+        target_spot = _require_positive_spot_value(
+            spot_lookup[target_date],
+            field_name="target_spot",
+            date_value=target_date,
+        )
+        spot_log_shift = log(quote_spot / target_spot)
+        target_moneyness_values = (
+            ("atm_target_log_moneyness", spot_log_shift),
+            (
+                "rr_put_target_log_moneyness",
+                spot_log_shift - hedging_config.skew_moneyness_abs,
+            ),
+            (
+                "rr_call_target_log_moneyness",
+                spot_log_shift + hedging_config.skew_moneyness_abs,
+            ),
+            (
+                "hedge_straddle_target_log_moneyness",
+                spot_log_shift + hedging_config.hedge_straddle_moneyness,
+            ),
+        )
+        for field_name, value in target_moneyness_values:
+            if (
+                moneyness_min <= value <= moneyness_max
+                or isclose(
+                    value,
+                    moneyness_min,
+                    rel_tol=0.0,
+                    abs_tol=HEDGING_DOMAIN_ABSOLUTE_TOLERANCE,
+                )
+                or isclose(
+                    value,
+                    moneyness_max,
+                    rel_tol=0.0,
+                    abs_tol=HEDGING_DOMAIN_ABSOLUTE_TOLERANCE,
+                )
+            ):
+                continue
+            message = (
+                "Hedging spot path moves a carried instrument outside the surface "
+                "moneyness domain: "
+                f"{field_name}={value!r}, moneyness_bounds=[{moneyness_min!r}, "
+                f"{moneyness_max!r}], quote_date={_format_date_for_message(quote_date)}, "
+                f"target_date={_format_date_for_message(target_date)}, "
+                f"quote_spot={quote_spot!r}, target_spot={target_spot!r}."
+            )
+            raise ValueError(message)

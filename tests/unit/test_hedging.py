@@ -18,6 +18,7 @@ from ivsurf.hedging.revaluation import (
 )
 from ivsurf.hedging.validation import (
     require_hedging_config_in_surface_domain,
+    require_hedging_spot_paths_in_surface_domain,
     require_hedging_summary_matches_results,
 )
 from ivsurf.surfaces.grid import SurfaceGrid
@@ -130,6 +131,28 @@ def test_surface_interpolator_rejects_out_of_domain_queries() -> None:
             valuation_date=date(2021, 1, 5),
             model_name="unit_model",
         )
+
+
+def test_surface_interpolator_accepts_exp_log_roundoff_at_domain_edges() -> None:
+    surface = SurfaceInterpolator(
+        maturity_days=np.asarray([7.0, 30.0, 60.0], dtype=np.float64),
+        moneyness_points=np.asarray([-0.1, 0.0, 0.1], dtype=np.float64),
+        total_variance_grid=np.asarray(
+            [
+                [0.01, 0.02, 0.03],
+                [0.04, 0.05, 0.06],
+                [0.07, 0.08, 0.09],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    rounded_left_edge = float(np.log(np.exp(-0.1)))
+    rounded_right_edge = float(np.log(np.exp(0.1)))
+
+    assert rounded_left_edge < -0.1
+    assert rounded_right_edge > 0.1
+    assert surface.sigma(30, rounded_left_edge) == pytest.approx(surface.sigma(30, -0.1))
+    assert surface.sigma(30, rounded_right_edge) == pytest.approx(surface.sigma(30, 0.1))
 
 
 def test_value_instrument_rejects_expired_maturity_before_surface_lookup() -> None:
@@ -452,6 +475,63 @@ def test_stage08_hedging_config_prevalidation_rejects_exhausted_hedge_maturity()
             grid,
             max_target_gap_days=30,
         )
+
+
+def test_stage08_hedging_spot_path_validation_rejects_skew_drift_outside_grid() -> None:
+    grid = SurfaceGrid(maturity_days=(1, 30, 90), moneyness_points=(-0.1, 0.0, 0.1))
+    config = HedgingConfig.model_validate(
+        {
+            "risk_free_rate": 0.0,
+            "level_notional": 1.0,
+            "skew_notional": 1.0,
+            "calendar_notional": 0.5,
+            "skew_moneyness_abs": 0.1,
+            "short_maturity_days": 30,
+            "long_maturity_days": 90,
+            "hedge_maturity_days": 30,
+            "hedge_straddle_moneyness": 0.0,
+            "hedge_vega_floor": 1.0e-12,
+        }
+    )
+    quote_date = date(2021, 1, 4)
+    target_date = date(2021, 1, 5)
+    forecast_frame = pl.DataFrame({"quote_date": [quote_date], "target_date": [target_date]})
+
+    with pytest.raises(ValueError, match=r"rr_put_target_log_moneyness.*2021-01-04"):
+        require_hedging_spot_paths_in_surface_domain(
+            config,
+            grid,
+            forecast_frame=forecast_frame,
+            spot_lookup={quote_date: 100.0, target_date: 101.0},
+        )
+
+
+def test_stage08_hedging_spot_path_validation_accepts_interior_skew_buffer() -> None:
+    grid = SurfaceGrid(maturity_days=(1, 30, 90), moneyness_points=(-0.1, 0.0, 0.1))
+    config = HedgingConfig.model_validate(
+        {
+            "risk_free_rate": 0.0,
+            "level_notional": 1.0,
+            "skew_notional": 1.0,
+            "calendar_notional": 0.5,
+            "skew_moneyness_abs": 0.05,
+            "short_maturity_days": 30,
+            "long_maturity_days": 90,
+            "hedge_maturity_days": 30,
+            "hedge_straddle_moneyness": 0.0,
+            "hedge_vega_floor": 1.0e-12,
+        }
+    )
+    quote_date = date(2021, 1, 4)
+    target_date = date(2021, 1, 5)
+    forecast_frame = pl.DataFrame({"quote_date": [quote_date], "target_date": [target_date]})
+
+    require_hedging_spot_paths_in_surface_domain(
+        config,
+        grid,
+        forecast_frame=forecast_frame,
+        spot_lookup={quote_date: 100.0, target_date: 101.0},
+    )
 
 
 def test_hedging_summary_validation_rejects_stale_metric_values() -> None:

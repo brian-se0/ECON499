@@ -50,7 +50,11 @@ def _hex_to_rgb(color: str) -> tuple[int, int, int]:
     if len(stripped) != 6:
         message = f"Expected 6-digit hex color, found {color!r}."
         raise ValueError(message)
-    return tuple(int(stripped[index : index + 2], 16) for index in (0, 2, 4))
+    return (
+        int(stripped[0:2], 16),
+        int(stripped[2:4], 16),
+        int(stripped[4:6], 16),
+    )
 
 
 def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
@@ -61,9 +65,10 @@ def _interpolate_hex_color(start: str, end: str, fraction: float) -> str:
     bounded_fraction = _clamp(fraction, 0.0, 1.0)
     start_rgb = _hex_to_rgb(start)
     end_rgb = _hex_to_rgb(end)
-    blended = tuple(
-        round(start_channel + ((end_channel - start_channel) * bounded_fraction))
-        for start_channel, end_channel in zip(start_rgb, end_rgb, strict=True)
+    blended = (
+        round(start_rgb[0] + ((end_rgb[0] - start_rgb[0]) * bounded_fraction)),
+        round(start_rgb[1] + ((end_rgb[1] - start_rgb[1]) * bounded_fraction)),
+        round(start_rgb[2] + ((end_rgb[2] - start_rgb[2]) * bounded_fraction)),
     )
     return _rgb_to_hex(blended)
 

@@ -28,6 +28,7 @@ from ivsurf.hedging.revaluation import surface_interpolator_from_frame
 from ivsurf.hedging.validation import (
     require_hedging_config_in_surface_domain,
     require_hedging_results_match_forecast_coverage,
+    require_hedging_spot_paths_in_surface_domain,
     require_hedging_summary_matches_results,
 )
 from ivsurf.io.parquet import read_parquet_files, write_parquet_frame
@@ -45,6 +46,10 @@ from ivsurf.training.tuning import (
 from ivsurf.workflow import resolve_workflow_run_paths
 
 app = typer.Typer(add_completion=False)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
 
 
 def _actual_surface_lookup(actual_surface_frame: pl.DataFrame) -> dict[object, pl.DataFrame]:
@@ -160,6 +165,12 @@ def main(
         grid,
         max_target_gap_days=max(forecast_calendar_gaps),
     )
+    require_hedging_spot_paths_in_surface_domain(
+        hedging_config,
+        grid,
+        forecast_frame=forecast_frame,
+        spot_lookup=spot_lookup,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     by_model_dir.mkdir(parents=True, exist_ok=True)
@@ -167,9 +178,10 @@ def main(
     model_output_paths: list[Path] = []
     model_names = tuple(
         str(value)
-        for value in forecast_frame.select("model_name").unique().sort("model_name")[
-            "model_name"
-        ].to_list()
+        for value in forecast_frame.select("model_name")
+        .unique()
+        .sort("model_name")["model_name"]
+        .to_list()
     )
     with create_progress() as progress:
         task_id = progress.add_task("Stage 08 hedging evaluation", total=len(model_names))
@@ -272,7 +284,7 @@ def main(
     write_parquet_frame(summary_frame, hedging_summary_path)
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="08_run_hedging_eval",
         started_at=started_at,
         config_paths=[

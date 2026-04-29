@@ -46,6 +46,10 @@ from ivsurf.workflow import resolve_workflow_run_paths
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _daily_loss_matrix(
     loss_frame: pl.DataFrame,
     metric_column: str,
@@ -461,7 +465,7 @@ def main(
     ]
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="07_run_stats",
         started_at=started_at,
         config_paths=[

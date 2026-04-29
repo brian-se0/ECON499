@@ -14,7 +14,7 @@ def _write_config_files(tmp_path: Path) -> tuple[Path, Path, Path]:
     raw_config_path.write_text(
         "\n".join(
             (
-                f'raw_options_dir: "{raw_root}"',
+                f'raw_options_dir: "{raw_root.as_posix()}"',
                 'bronze_dir: "data/bronze"',
                 'silver_dir: "data/silver"',
                 'gold_dir: "data/gold"',

@@ -35,6 +35,10 @@ from ivsurf.surfaces.grid import SurfaceGrid, require_surface_grid_metadata
 app = typer.Typer(add_completion=False)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
@@ -179,7 +183,7 @@ def main(
     )
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
-        repo_root=Path.cwd(),
+        repo_root=_repo_root(),
         script_name="04_build_features",
         started_at=started_at,
         config_paths=[
