@@ -2,9 +2,9 @@
 
 ## Abstract
 
-This thesis develops and evaluates a research-grade, leak-free forecasting pipeline for the SPX implied-volatility surface using raw Cboe 15:45 option data. The official sample spans 4,347 trading days from `2004-01-02` through `2021-04-09`. Raw daily `UnderlyingOptionsEODCalcs_*.zip` files are ingested under explicit schema validation, filtered early to the `^SPX` underlying universe, cleaned with logged rule-based quality flags, and transformed into daily 9×9 total-variance surfaces over fixed log-moneyness and maturity grids. The resulting supervised dataset contains 4,325 daily feature rows and 898 columns, with next-observed-session alignment, preserved target-day observed-cell masks, and explicit split manifests. Forecasting is evaluated in an expanding blocked walk-forward design with 175 total splits, of which 173 remain as clean out-of-sample evaluation splits after removing windows contaminated by hyperparameter-tuning validation dates. The benchmark universe includes a no-change surface benchmark (`naive` in code), ridge, elastic net, a HAR/factor benchmark, LightGBM, random forest, and an arbitrage-aware neural model, all trained to predict total variance rather than raw implied volatility.
+This thesis develops and evaluates a research-grade, leak-free forecasting pipeline for the SPX implied-volatility surface using raw Cboe 15:45 option data. The official sample spans 4,347 trading days from `2004-01-02` through `2021-04-09`. Raw daily `UnderlyingOptionsEODCalcs_*.zip` files are ingested under explicit schema validation, filtered early to the `^SPX` underlying universe, cleaned with logged rule-based quality flags, and transformed into daily 9×9 total-variance surfaces over fixed log-moneyness and maturity grids. The resulting supervised dataset contains 4,325 daily feature rows and 906 columns, with next-observed-session alignment, preserved target-day observed-cell masks, and explicit split manifests. Forecasting is evaluated in an expanding blocked walk-forward design with 175 total splits, of which 173 remain as clean out-of-sample evaluation splits after removing windows contaminated by hyperparameter-tuning validation dates. The benchmark universe includes a no-change surface benchmark (`naive` in code), ridge, elastic net, a HAR/factor benchmark, LightGBM, random forest, and an arbitrage-aware neural model, all trained to predict total variance rather than raw implied volatility.
 
-The main empirical result is unambiguous. On the primary official loss, observed-cell MSE in total variance, the no-change surface benchmark is best with a mean loss of 0.000025, ahead of `har_factor` at 0.000041 and `random_forest` at 0.000068. It is also best on the primary tail-risk profile, with a 95th-percentile loss of 0.000055, and best on the report’s conditional surface-revaluation ranking, with mean absolute revaluation error of 5.729051. The HAR/factor benchmark is the strongest learned model: it delivers the best mean observed-cell QLIKE at 0.024208 and the strongest short-maturity completed-grid gains on the primary metric, improving on `naive` by 46.605807%, 38.749967%, and 21.648583% on the 1-day, 7-day, and 14-day maturity slices. But it does not overturn the primary headline. The arbitrage-aware neural model materially underperforms under the saved Mac CPU profile, with mean observed-cell MSE of 0.002981, mean observed-cell QLIKE of 2,598,062.037716, and tuning diagnostics consistent with severe underprediction. The thesis therefore contributes both infrastructure and evidence: once temporal integrity is enforced, persistence is hard to beat in next-session SPX surface forecasting.
+The main empirical result is clear. On the primary official loss, observed-cell MSE in total variance, the no-change surface benchmark is best with a mean loss of 0.000028, ahead of `har_factor` at 0.000033 and `random_forest` at 0.000056. It is also best on the primary tail-risk profile, with a 95th-percentile loss of 0.000042, and best on the report’s conditional surface-revaluation ranking, with mean absolute revaluation error of 5.728994. The HAR/factor benchmark is the strongest learned model: it delivers the best mean observed-cell QLIKE at 0.023590, is retained with `naive` in the primary simplified Tmax set, and has the strongest short-maturity completed-grid gains on the primary metric, improving on `naive` by 44.870188%, 35.310966%, and 16.329552% on the 1-day, 7-day, and 14-day maturity slices. But it does not overturn the primary headline. The arbitrage-aware neural model materially underperforms under the saved Windows/CUDA profile, with mean observed-cell MSE of 0.001860, mean observed-cell QLIKE of 2,410,355.657234, and tuning diagnostics consistent with severe underprediction. The thesis therefore contributes both infrastructure and evidence: once temporal integrity is enforced, persistence is hard to beat in next-session SPX surface forecasting.
 
 ## Introduction
 
@@ -28,7 +28,7 @@ Table 1 summarizes the sample, walk-forward geometry, and benchmark universe.
 | Raw daily files processed | `4347` |
 | Gold surfaces built | `4347` |
 | Supervised feature rows | `4325` |
-| Feature columns | `898` |
+| Feature columns | `906` |
 | Forecast rows per model | `3633` |
 | Clean evaluation quote-date range | `2006-10-03` through `2021-03-10` |
 | Clean evaluation target-date range | `2006-10-04` through `2021-03-11` |
@@ -79,7 +79,7 @@ Finally, the literature has not treated economic evaluation as optional. Chalama
 
 ## Data
 
-The raw source is the calcs-included Cboe Option EOD Summary daily zip format. The vendor layout note describes the source as a zipped CSV daily summary with a 15:45 snapshot and an end-of-day snapshot for regular trading hours, and it notes that on early-close days the “1545” fields are still named the same even though the effective snapshot is taken at 12:45 ET. The official thesis window is enforced in executable configuration and code as `2004-01-02` through `2021-04-09`. Within that window, the saved run processes 4,347 daily `UnderlyingOptionsEODCalcs_*.zip` files and writes 4,347 bronze parquet files. The refreshed Mac CPU provenance supplement records checksums for those 4,347 raw zips, 4,347 bronze files, 4,347 silver files, 4,347 daily gold surface files, and all seven forecast files used by the canonical report profile.
+The raw source is the calcs-included Cboe Option EOD Summary daily zip format. The vendor layout note describes the source as a zipped CSV daily summary with a 15:45 snapshot and an end-of-day snapshot for regular trading hours, and it notes that on early-close days the “1545” fields are still named the same even though the effective snapshot is taken at 12:45 ET. The official thesis window is enforced in executable configuration and code as `2004-01-02` through `2021-04-09`. Within that window, the saved run processes 4,347 daily `UnderlyingOptionsEODCalcs_*.zip` files and writes 4,347 bronze parquet files. The refreshed 2026-04-29 Windows/CUDA run manifests record the commit hash `b208f9b8aad15367831c67860566a817a06cca8c` and content hashes for the generated forecast, statistical, hedging, and report artifacts.
 
 The thesis universe is defined by `underlying_symbol == "^SPX"`. Importantly, that is an underlying-based definition rather than a root-based one, so it includes both `SPX` and `SPXW` roots whenever they are written on the SPX underlying. This matters because the pipeline later applies root-based settlement conventions to maturity calculation, but it does not exclude weekly contracts simply because they use a different option root.
 
@@ -101,7 +101,7 @@ The option-level panel is transformed into derived quantities at the decision sn
 
 Daily surfaces are built on a fixed 9×9 grid. The log-moneyness grid is `[-0.30, -0.20, -0.10, -0.05, 0.00, 0.05, 0.10, 0.20, 0.30]`, and the maturity grid in calendar days is `[1, 7, 14, 30, 60, 90, 180, 365, 730]`. Each valid option row is assigned to the nearest maturity and moneyness cell by midpoint binning. Within each cell, the repository aggregates observations using vega-weighted averages. In particular, observed total variance and observed implied volatility are both vega-weighted, and the saved surface also retains the cell-level vega sum, weighted spread, and observation count. A cell is marked as observed when its observation count is at least 1.
 
-This observed/completed distinction is fundamental. The saved gold surface artifacts contain both the sparse observed surface and the dense completed surface. Across the 4,347 gold surfaces in the official run, the total number of observed cells is 277,737. The number of observed cells per day ranges from 37 to 81, with a median of 65. Completed surfaces, by construction, always have all 81 cells. That sparsity makes interpolation unavoidable, but it also motivates preserving the observed-cell mask so that evaluation can later distinguish between genuinely observed target regions and cells created entirely by completion.
+This observed/completed distinction is fundamental. The saved gold surface artifacts contain both the sparse observed surface and the dense completed surface. Across the 4,347 gold surfaces in the official run, the total number of observed cells is 274,896. The number of observed cells per day ranges from 36 to 81, with a median of 64. Completed surfaces, by construction, always have all 81 cells. That sparsity makes interpolation unavoidable, but it also motivates preserving the observed-cell mask so that evaluation can later distinguish between genuinely observed target regions and cells created entirely by completion.
 
 Surface completion is deterministic and takes place in total-variance space. The canonical procedure is sequential one-dimensional interpolation using monotone piecewise cubic Hermite interpolation. The saved configuration applies interpolation first along the maturity axis and then along the moneyness axis, repeating that sequence for 2 cycles. Outside the observed range on a given axis, the nearest boundary value is carried forward rather than extrapolated with a new slope. Any remaining values are rejected, and the finished completed surface is floored at `1.0e-8` in total variance. Implied-volatility surfaces used for reporting are derived only after this step through the identity `IV = sqrt(total_variance / tau)`. The project does not interpolate raw implied volatility directly.
 
@@ -119,7 +119,7 @@ Table 2 reports the fixed grid and the minimum coverage facts needed to interpre
 | Grid size | `9 x 9 = 81` cells |
 | Interpolation order and cycles | `maturity -> moneyness`, `2` cycles |
 | Total-variance floor | `1.0e-8` |
-| Observed cells per day | min `37`, median `65`, max `81` |
+| Observed cells per day | min `36`, median `64`, max `81` |
 | Completed cells per day | always `81` |
 
 ## Feature Engineering and Targets
@@ -130,7 +130,7 @@ Feature construction uses only information available by the quote-date decision 
 
 Targets are stored separately and explicitly. Every supervised row includes the next-session completed target surface in total variance, the next-session observed-cell mask, the next-session vega weights, and target-side training weights. These training weights are especially important for the neural model. Observed target cells retain their positive target-day vega weights, while completed-only cells receive unit weight so that a nonzero imputed-cell loss can be applied without collapsing those cells to zero weight.
 
-The resulting daily feature file spans quote dates from `2004-02-03` through `2021-04-08` and target dates from `2004-02-04` through `2021-04-09`. It contains 4,325 rows and 898 columns. The reduction from 4,347 gold surfaces to 4,325 supervised rows is exactly what the design implies: a 22-session warm-up for the longest lag window and the loss of the final date as a target-less terminal observation.
+The resulting daily feature file spans quote dates from `2004-02-03` through `2021-04-08` and target dates from `2004-02-04` through `2021-04-09`. It contains 4,325 rows and 906 columns. The reduction from 4,347 gold surfaces to 4,325 supervised rows is exactly what the design implies: a 22-session warm-up for the longest lag window and the loss of the final date as a target-less terminal observation.
 
 A subtle but important point is that the project forecasts the completed next-session surface for every model, not just for the neural model. The observed-cell mask is preserved alongside that completed target and is used later to define the official evaluation slices. This prevents an apples-to-oranges comparison in which some models are trained on dense surfaces but judged against sparse, model-specific observed subsets.
 
@@ -142,15 +142,15 @@ The no-change surface benchmark is deliberately simple and deliberately strong. 
 
 The linear baselines are multi-output ridge and multi-task elastic net regressions on the daily feature matrix. Both standardize features within the fit window, transform strictly positive total-variance targets into log space, and invert predictions back to total variance after fitting. They are intended to test whether simple shrinkage on a high-dimensional but structured feature matrix can outperform surface persistence.
 
-The HAR/factor benchmark compresses the surface into a small number of principal components and then applies a HAR-style structure in factor space. Specifically, it projects the next-session completed target surface, and the lag-1, lag-5, and lag-22 completed surfaces, into PCA factors fitted inside the training window. A ridge regression then maps lagged factor summaries to next-session factor scores, and the surface is reconstructed by inverse transformation. In the saved 30-trial HPO run, the selected configuration uses 9 factors and ridge penalty `alpha = 6.644070263467316`.
+The HAR/factor benchmark compresses the surface into a small number of principal components and then applies a HAR-style structure in factor space. Specifically, it projects the next-session completed target surface, and the lag-1, lag-5, and lag-22 completed surfaces, into PCA factors fitted inside the training window. A ridge regression then maps lagged factor summaries to next-session factor scores, and the surface is reconstructed by inverse transformation. In the saved 30-trial HPO run, the selected configuration uses 9 factors and ridge penalty `alpha = 75.38868435013475`.
 
-The tree benchmarks test whether nonlinear predictors can exploit interactions that the linear models miss. The random forest model is a multi-output forest fitted to the daily feature matrix in log-target space. The LightGBM benchmark is more structured: it projects targets to PCA factor space and fits one gradient-boosted tree model per factor, with validation-aware early stopping. In the saved run, the selected LightGBM configuration uses 400 trees, learning rate `0.11962323112686886`, maximum depth 3, `num_leaves = 21`, and 9 PCA factors. The selected random forest configuration uses 400 trees, maximum depth 10, and `min_samples_leaf = 1`.
+The tree benchmarks test whether nonlinear predictors can exploit interactions that the linear models miss. The random forest model is a multi-output forest fitted to the daily feature matrix in log-target space. The LightGBM benchmark is more structured: it projects targets to PCA factor space and fits one gradient-boosted tree model per factor, with validation-aware early stopping. In the saved run, the selected LightGBM configuration uses 400 trees, learning rate `0.011800277461226189`, maximum depth 3, `num_leaves = 60`, and 9 PCA factors. The selected random forest configuration uses 500 trees, maximum depth 11, and `min_samples_leaf = 2`.
 
 The flagship neural model is a compact multilayer perceptron that predicts the full 81-cell total-variance surface jointly. Its hidden layers use GELU activations and dropout, and its output passes through a softplus transformation plus an explicit positive total-variance floor. The training objective is a weighted surface MSE on the completed target surface, with separate weights for observed and completed-only cells and with target-side cell weights carried from the data pipeline. On top of that supervised loss, the model adds soft penalties for three surface-shape properties: calendar monotonicity across maturities, strike-space call-price convexity implied by the nonuniform moneyness grid, and local roughness. These are diagnostics and penalties, not hard constraints. The model is therefore arbitrage-aware, not arbitrage-free (Medvedev and Wang, 2022; Zhang, Li, and Zhang, 2023; Gatheral and Jacquier, 2014; Mingone, 2022). In the saved official run, the selected neural configuration uses hidden width 384, depth 2, dropout `0.10712118850586368`, learning rate `0.00422336970502679`, batch size 128, and small penalty weights.
 
 The saved official hyperparameters are reported in Appendix Table A1 and are also pinned down by the serialized tuning artifacts. They are fixed before the clean evaluation sample is summarized in the results that follow.
 
-The report artifacts cited in the tables and figures use run profile `hpo_30_trials__train_30_epochs__mac_cpu`. This profile reruns the raw-to-feature chain from `/Volumes/T9/Options Data`, regenerates all seven model forecasts in the Mac profile directory, and recomputes stages 07 through 09. The local Mac LightGBM forecast is generated with a no-OpenMP LightGBM 4.6.0 build and `n_jobs = 1`, which avoids the native OpenMP-runtime conflict observed with the stock macOS wheel. The profile also records `data/manifests/forecast_profile_reuse/mac_cpu.json`, whose `reused_models` list is empty for the refreshed canonical Mac run.
+The report artifacts cited in the tables and figures use run profile `hpo_30_trials__train_30_epochs`. This profile reruns the raw-to-report chain from `D:\Options Data` on Windows/CUDA, regenerates all seven model forecasts, and recomputes stages 07 through 09. The latest 2026-04-29 stage manifests all point to commit `b208f9b8aad15367831c67860566a817a06cca8c`, so the reported artifacts are tied to the pushed code state used for the end-to-end run.
 
 ## Walk-Forward Design, Tuning, and Evaluation
 
@@ -160,7 +160,7 @@ Hyperparameter tuning is separated from final evaluation by construction. The of
 
 The distinction between training and validation also matters inside each walk-forward fit. For the models without validation-aware early stopping—`naive`, ridge, elastic net, HAR/factor, and random forest—the repository refits on the combined train-plus-validation window before generating test forecasts. For the validation-aware models—LightGBM and the neural network—the validation block is retained as a true validation slice for early stopping or checkpoint selection on each split. In all cases, preprocessing objects are fit inside the relevant training window only. Standardization, PCA factorization, and neural feature normalization do not see future rows before prediction.
 
-Forecast artifacts are produced only for the clean evaluation sample. Each model generates 3,633 forecast rows, spanning quote dates from `2006-10-03` through `2021-03-10` and target dates from `2006-10-04` through `2021-03-11`. Those artifacts are then aligned to two realized states: the target-day surface and the origin-day surface. That alignment allows the evaluation code to compute both level errors and implied-volatility changes.
+Forecast artifacts are produced only for the clean evaluation sample. Each model generates 3,633 forecast surfaces, stored as 294,273 cell rows, spanning quote dates from `2006-10-03` through `2021-03-10` and target dates from `2006-10-04` through `2021-03-11`. Those artifacts are then aligned to two realized states: the target-day surface and the origin-day surface. That alignment allows the evaluation code to compute both level errors and implied-volatility changes.
 
 The primary official loss is `observed_mse_total_variance`. It evaluates the predicted completed target surface against the realized completed target surface on the cells that are actually observed on the target day, using target-day vega weights. The secondary official loss is `observed_qlike_total_variance`. It uses the same target-day observed-cell mask, but it is not vega-weighted; it is computed as an unweighted QLIKE average over the observed target cells subject to the configured positive floor. This distinction matters because the thesis’s headline result is anchored to the weighted observed-cell MSE criterion, while the secondary result reflects a different loss geometry on the same observed target region. Supplementary completed-grid metrics use all 81 completed cells, with uniform weights for weighted losses and simple averaging for QLIKE.
 
@@ -176,19 +176,19 @@ Figure 1 illustrates the walk-forward timing geometry.
 
 ### Primary loss performance
 
-The primary result is clear. On the official observed-cell MSE metric in total variance, the no-change surface benchmark (`naive`) ranks first with mean loss 0.000025. The closest challengers are `har_factor` at 0.000041 and `random_forest` at 0.000068. The remaining models are materially worse, and the log-scaled normalization in Figure 2 makes clear that the gap widens rapidly once one moves beyond those two challengers.
+The primary result is clear. On the official observed-cell MSE metric in total variance, the no-change surface benchmark (`naive`) ranks first with mean loss 0.000028. The closest challengers are `har_factor` at 0.000033 and `random_forest` at 0.000056. The remaining models are materially worse, and the log-scaled normalization in Figure 2 makes clear that the gap widens rapidly once one moves beyond those two challengers.
 
-The persistence result is not driven by a few lucky days. Derived from the saved daily loss frame, `naive` beats `har_factor` on 3,395 of 3,633 target dates, `random_forest` on 3,304 days, `lightgbm` on 3,499 days, `elasticnet` on 3,349 days, and `neural_surface` on 3,631 days. Even `ridge`, which occasionally looks competitive on isolated days, is still worse than `naive` on 3,243 of 3,633 days and loses the average by an enormous margin because of catastrophic outliers. A supplementary aggregation of the same saved daily loss frame also leaves `naive` first on mean completed-grid MSE, so the headline is not an artifact of restricting attention to observed cells.
+The persistence result is not driven by a few lucky days. Derived from the saved daily loss frame, `naive` beats `har_factor` on 3,302 of 3,633 target dates, `random_forest` on 3,306 days, `lightgbm` on 3,497 days, `elasticnet` on 3,294 days, and `neural_surface` on 3,631 days. Even `ridge`, which occasionally looks competitive on isolated days, is still worse than `naive` on 3,236 of 3,633 days and loses the average by an enormous margin because of catastrophic outliers. A supplementary aggregation of the same saved daily loss frame also leaves `naive` first on mean completed-grid MSE, so the headline is not an artifact of restricting attention to observed cells.
 
-The tail-risk evidence points in the same direction. On the primary metric, `naive` has the best 95th-percentile daily loss at 0.000055, compared with 0.000145 for `har_factor`, 0.000213 for `random_forest`, 0.000765 for `lightgbm`, 0.000183 for `elasticnet`, 0.009927 for `neural_surface`, and 0.000170 for `ridge`. `har_factor` and `random_forest` occasionally produce slightly smaller worst single-day losses than `naive`, but they do so while being materially worse at the 90th, 95th, and 99th percentiles. The primary worst-day drilldown reinforces this asymmetry: `naive`’s maximum loss is 0.009466, whereas `neural_surface` reaches 0.034380 and `ridge` reaches 7,312.550531.
+The tail-risk evidence points in the same direction. On the primary metric, `naive` has the best 95th-percentile daily loss at 0.000042, compared with 0.000101 for `har_factor`, 0.000154 for `random_forest`, 0.000510 for `lightgbm`, 0.000130 for `elasticnet`, 0.005533 for `neural_surface`, and 0.000164 for `ridge`. `har_factor` and `random_forest` occasionally produce slightly smaller worst single-day losses than `naive`, but they do so while being materially worse at the 90th and 95th percentiles. The primary worst-day drilldown reinforces the risk of unstable learned models: `naive`’s maximum loss is 0.011255, whereas `neural_surface` reaches 0.025196 and `ridge` reaches 72.336926.
 
-The broader saved comparison tests agree with the ranking. On the primary metric, the block-bootstrap SPA test against the challenger set returns `p = 0.586`, with no superior models by mean. The simplified Tmax model confidence set retains only `naive` at alpha 0.10. Those saved test artifacts support a strong conclusion: within the official leak-free design, no challenger overturns the no-change surface benchmark on the primary loss.
+The broader saved comparison tests agree with the ranking while adding one nuance. On the primary metric, the block-bootstrap SPA test against the challenger set returns `p = 0.808`, with no superior models by mean. The simplified Tmax model confidence set retains both `har_factor` and `naive` at alpha 0.10. Those saved test artifacts support the main conclusion: within the official leak-free design, no challenger overturns the no-change surface benchmark on the primary mean loss, even though `har_factor` is close enough to remain in the primary simplified confidence set.
 
 Figure 2 visualizes the primary ranking.
 
 **Figure 2. Mean observed-cell MSE by model, normalized to `naive = 1` and shown on a log scale.**
 
-![Mean observed-cell MSE relative to naive on a log scale.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/figures/loss_ranking.svg)
+![Mean observed-cell MSE relative to naive on a log scale.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs/figures/loss_ranking.svg)
 
 Table 4 reports a compressed primary tail-risk summary.
 
@@ -196,31 +196,31 @@ Table 4 reports a compressed primary tail-risk summary.
 
 | rank | model_name | mean_loss | p95_loss | p99_loss | max_loss |
 | --- | --- | --- | --- | --- | --- |
-| 1 | naive | 0.000025 | 0.000055 | 0.000281 | 0.009466 |
-| 2 | har_factor | 0.000041 | 0.000145 | 0.000410 | 0.008825 |
-| 3 | random_forest | 0.000068 | 0.000213 | 0.000971 | 0.008816 |
-| 4 | lightgbm | 0.000272 | 0.000765 | 0.006422 | 0.018349 |
-| 5 | elasticnet | 0.000631 | 0.000183 | 0.002774 | 0.460190 |
-| 6 | neural_surface | 0.002981 | 0.009927 | 0.016812 | 0.034380 |
-| 7 | ridge | 2.014039 | 0.000170 | 0.008059 | 7312.550531 |
+| 1 | naive | 0.000028 | 0.000042 | 0.000331 | 0.011255 |
+| 2 | har_factor | 0.000033 | 0.000101 | 0.000308 | 0.010600 |
+| 3 | random_forest | 0.000056 | 0.000154 | 0.000890 | 0.010518 |
+| 4 | lightgbm | 0.000223 | 0.000510 | 0.005578 | 0.014632 |
+| 5 | elasticnet | 0.000669 | 0.000130 | 0.002738 | 0.473019 |
+| 6 | neural_surface | 0.001860 | 0.005533 | 0.014103 | 0.025196 |
+| 7 | ridge | 0.021571 | 0.000164 | 0.009755 | 72.336926 |
 
 ### Secondary metric and slice behavior
 
-The secondary metric tells a more nuanced story. On observed-cell QLIKE in total variance, the HAR/factor benchmark (`har_factor`) ranks first with mean loss 0.024208. It is followed by `random_forest` at 0.028975, `elasticnet` at 0.034404, `lightgbm` at 0.060195, `ridge` at 1.345556, `naive` at 9.447580, and `neural_surface` at 2,598,062.037716. On this metric, the strongest learned model is therefore not merely competitive but decisively ahead in the mean.
+The secondary metric tells a more nuanced story. On observed-cell QLIKE in total variance, the HAR/factor benchmark (`har_factor`) ranks first with mean loss 0.023590. It is followed by `random_forest` at 0.028306, `elasticnet` at 0.033896, `lightgbm` at 0.060413, `ridge` at 0.646641, `naive` at 4.542662, and `neural_surface` at 2,410,355.657234. On this metric, the strongest learned model is therefore not merely competitive but decisively ahead in the mean.
 
-That mean, however, must be interpreted carefully. `har_factor` does not dominate `naive` day by day. It improves on `naive` on 1,692 of 3,633 target dates and loses on 1,941. The reason the mean nonetheless favors `har_factor` is that `naive` has a handful of very large QLIKE blowups. Its 95th-percentile QLIKE is only 0.061089, but its maximum daily QLIKE reaches 13,624.020964. By contrast, `har_factor` has a 95th percentile of 0.048626 and a maximum of 1.607816. The saved worst-day table shows that the largest `naive` QLIKE episodes occur late in the sample, including target dates `2021-03-02` and `2021-02-25`.
+That mean, however, must be interpreted carefully. `har_factor` does not dominate `naive` day by day. It improves on `naive` on 1,654 of 3,633 target dates and loses on 1,979. The reason the mean nonetheless favors `har_factor` is that `naive` has a handful of very large QLIKE blowups. Its 95th-percentile QLIKE is only 0.058161, but its maximum daily QLIKE reaches 9,235.519517. By contrast, `har_factor` has a 95th percentile of 0.048978 and a maximum of 1.671184. The saved worst-day table shows that the largest `naive` QLIKE episodes occur late in the sample, including target dates `2020-10-30`, `2021-02-24`, and `2021-02-25`.
 
-The statistical evidence for the secondary story is therefore favorable but less decisive than the primary MSE result. Pairwise Diebold-Mariano tests comparing `naive` to individual challengers produce `p = 0.037912` against `har_factor` and similarly small p-values against several other challengers, which is consistent with lower mean QLIKE for those models. The simplified Tmax confidence set retains `har_factor` on the secondary metric. But the SPA test against the full challenger set returns `p = 0.102`, just above the configured alpha of 0.10. The safest interpretation is that the QLIKE evidence is favorable to `har_factor`, but less decisive than the primary MSE result in favor of `naive`.
+The statistical evidence for the secondary story is favorable but less decisive than the primary MSE result. Pairwise Diebold-Mariano tests comparing `naive` to individual challengers produce `p = 0.058619` against `har_factor` and similar p-values against several other challengers, which is consistent with lower mean QLIKE for those models at conventional one-sided levels. The simplified Tmax confidence set retains `har_factor` on the secondary metric. The SPA test against the full challenger set returns `p = 0.098`, just inside the configured alpha of 0.10. The safest interpretation is that the QLIKE evidence is favorable to `har_factor`, but it is still a secondary-loss result and not a reversal of the primary-MSE headline that favors `naive`.
 
-Slice-level results sharpen that interpretation. On the primary metric, `har_factor` posts the best completed-grid maturity-slice losses at the short end: 0.000027 on the 1-day slice versus 0.000050 for `naive`, 0.000009 versus 0.000015 at 7 days, and 0.000006 versus 0.000007 at 14 days. Those correspond to improvements of 46.605807%, 38.749967%, and 21.648583%. Outside that short end, `naive` owns the remaining completed-grid maturity slices. In observed-scope maturity slices, `random_forest` takes only the 1-day slice, with an 11.999788% improvement over `naive`; `naive` is best on the remaining observed-scope maturity slices. On the secondary metric, `har_factor` leads most short-maturity slices and many moneyness slices, while `naive` retains the long end and much of the observed-scope grid. The slice evidence therefore suggests that the learned models are not uniformly useless; it suggests something narrower and more interesting: short-maturity surface dynamics contain forecastable structure, especially under QLIKE and especially for HAR-style factor summaries. That structure is simply not strong enough, in the saved design, to dislodge persistence as the best overall model on the primary thesis metric.
+Slice-level results sharpen that interpretation. On the primary metric, `har_factor` posts the best completed-grid maturity-slice losses at the short end: 0.000014 on the 1-day slice versus 0.000026 for `naive`, 0.000006 versus 0.000009 at 7 days, and 0.000005 versus 0.000006 at 14 days. Those correspond to improvements of 44.870188%, 35.310966%, and 16.329552%. Outside that short end, `naive` owns the remaining completed-grid maturity slices. In observed-scope maturity slices, `random_forest` takes only the 1-day slice, with an 8.422732% improvement over `naive`; `naive` is best on the remaining observed-scope maturity slices. On the secondary metric, `har_factor` leads most short-maturity slices and many moneyness slices, while `naive` retains the long end and much of the observed-scope grid. The slice evidence therefore suggests that the learned models are not uniformly useless; it suggests something narrower and more interesting: short-maturity surface dynamics contain forecastable structure, especially under QLIKE and especially for HAR-style factor summaries. That structure is simply not strong enough, in the saved design, to dislodge persistence as the best overall model on the primary thesis metric.
 
-The cell-level heatmap makes that localization explicit. Under the primary observed-cell MSE criterion, `naive` is the best model in 58 of 81 cells. `har_factor` and `random_forest` each win 10 cells, while `lightgbm` wins only 3 isolated cells. The gains are therefore real, but they are sparse and concentrated rather than surface-wide.
+The cell-level heatmap makes that localization explicit. Under the primary observed-cell MSE criterion, `naive` is the best model in 62 of 81 cells. `random_forest` wins 11 cells, `har_factor` wins 6 cells, and `lightgbm` wins 2 isolated cells. The gains are therefore real, but they are sparse and concentrated rather than surface-wide.
 
 Figure 3 summarizes the cell-level pattern.
 
 **Figure 3. Best-performing model by cell on the 9x9 maturity-by-moneyness grid under observed-cell MSE. Cell fill shows percent improvement versus `naive`; cell text shows the winning model.**
 
-![Best model by surface cell under observed-cell MSE.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/figures/surface_performance_heatmap.svg)
+![Best model by surface cell under observed-cell MSE.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs/figures/surface_performance_heatmap.svg)
 
 Figure 4 summarizes the slice-level patterns.
 
@@ -228,21 +228,21 @@ Figure 4 summarizes the slice-level patterns.
 
 *Panel A. Observed-cell WRMSE by maturity slice.*
 
-![Observed-cell WRMSE by maturity slice.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/figures/maturity_slice_wrmse.svg)
+![Observed-cell WRMSE by maturity slice.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs/figures/maturity_slice_wrmse.svg)
 
 *Panel B. Observed-cell WRMSE by moneyness slice.*
 
-![Observed-cell WRMSE by moneyness slice.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/figures/moneyness_slice_wrmse.svg)
+![Observed-cell WRMSE by moneyness slice.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs/figures/moneyness_slice_wrmse.svg)
 
 ### Hedging performance, arbitrage diagnostics, and the neural model
 
-The hedging results again put `naive` first on the report’s official ranking metric, mean absolute conditional surface-revaluation error. `naive` records 5.729051, followed by `har_factor` at 6.353638, `random_forest` at 7.841045, `lightgbm` at 10.366269, `ridge` at 13.087057, `elasticnet` at 13.671021, and `neural_surface` at 96.935700. On this stylized measure, which revalues surfaces using the realized target-day spot, the no-change surface benchmark is also strongest.
+The hedging results again put `naive` first on the report’s official ranking metric, mean absolute conditional surface-revaluation error. `naive` records 5.728994, followed by `har_factor` at 6.752145, `random_forest` at 7.812179, `lightgbm` at 10.335272, `ridge` at 13.764123, `elasticnet` at 13.931918, and `neural_surface` at 96.921383. On this stylized measure, which revalues surfaces using the realized target-day spot, the no-change surface benchmark is also strongest.
 
-There is one secondary nuance. `har_factor` produces slightly smaller mean absolute hedged PnL than `naive`—2.837992 versus 2.877114—and slightly smaller mean squared hedged PnL—19.927431 versus 20.091176. That is an interesting signal that the HAR/factor benchmark may improve some hedge-stability aspects even when it loses the official revaluation ranking. But it does not reverse the main economic result, because the report’s headline hedging criterion is mean absolute revaluation error, and on that criterion `naive` remains first.
+There is one secondary nuance. `har_factor` produces slightly smaller mean absolute hedged PnL than `naive`—2.835992 versus 2.877204—and slightly smaller mean squared hedged PnL—19.876234 versus 20.091356. That is an interesting signal that the HAR/factor benchmark may improve some hedge-stability aspects even when it loses the official revaluation ranking. But it does not reverse the main economic result, because the report’s headline hedging criterion is mean absolute revaluation error, and on that criterion `naive` remains first.
 
-The saved diagnostics also clarify why the neural model must be described as arbitrage-aware rather than arbitrage-free. Out of sample, `neural_surface` is poor on every major scoreboard: mean observed-cell MSE 0.002981, mean observed-cell QLIKE 2,598,062.037716, mean absolute conditional surface-revaluation error 96.935700. Its tuning diagnostics are consistent with collapse toward near-zero predictions: among completed tuning split rows, the median selected metric is 0.0009463360888203731, the median prediction-to-target mean ratio is 0.04517458404633791, the median share of predictions below `1e-6` is 0.6775426219870664, and the median selected best epoch is 2. In plain language, the model often settles very early into extremely small surface forecasts.
+The saved diagnostics also clarify why the neural model must be described as arbitrage-aware rather than arbitrage-free. Out of sample, `neural_surface` is poor on every major scoreboard: mean observed-cell MSE 0.001860, mean observed-cell QLIKE 2,410,355.657234, mean absolute conditional surface-revaluation error 96.921383. Its tuning diagnostics are consistent with collapse toward near-zero predictions: among completed tuning split rows, the median selected metric is 0.0006867685582159196, the median prediction-to-target mean ratio is 0.026815021367272304, the median share of predictions below `1e-6` is 0.8669410150891632, and the median selected best epoch is 1. In plain language, the model often settles very early into extremely small surface forecasts.
 
-The arbitrage-diagnostic summary reinforces the distinction between soft awareness and hard guarantees. Using the corrected nonuniform-grid, price-convexity diagnostic, `neural_surface` averages 6.809524 calendar-monotonicity violations and 0.074869 butterfly-convexity violations per forecast surface. The corresponding magnitudes are 0.000157 and 0.024715. By contrast, `naive` averages 3.646023 calendar violations and 3.307459 convexity violations, while the actual completed surfaces average 3.513228 and 3.377042. The neural penalties therefore reduce price-convexity violation counts, but they still do not produce hard arbitrage-freeness or rescue forecast accuracy. Appendix Table A2 reports the full arbitrage-diagnostic summary.
+The arbitrage-diagnostic summary reinforces the distinction between soft awareness and hard guarantees. Using the corrected nonuniform-grid, price-convexity diagnostic, `neural_surface` averages 6.150840 calendar-monotonicity violations and 0.069639 butterfly-convexity violations per forecast surface. The corresponding magnitudes are 0.000187 and 0.022733. By contrast, `naive` averages 3.126342 calendar violations and 3.592898 convexity violations, while the actual completed surfaces average 3.003911 and 3.692432. The neural penalties therefore reduce price-convexity violation counts, but they still do not produce hard arbitrage-freeness or rescue forecast accuracy. Appendix Table A2 reports the full arbitrage-diagnostic summary.
 
 Table 5 reports the compressed hedging ranking.
 
@@ -250,13 +250,13 @@ Table 5 reports the compressed hedging ranking.
 
 | rank | model_name | mean_abs_revaluation_error | improvement_vs_benchmark_pct |
 | --- | --- | --- | --- |
-| 1 | naive | 5.729051 | 0.000000 |
-| 2 | har_factor | 6.353638 | -10.902102 |
-| 3 | random_forest | 7.841045 | -36.864630 |
-| 4 | lightgbm | 10.366269 | -80.942150 |
-| 5 | ridge | 13.087057 | -128.433226 |
-| 6 | elasticnet | 13.671021 | -138.626267 |
-| 7 | neural_surface | 96.935700 | -1592.002645 |
+| 1 | naive | 5.728994 | 0.000000 |
+| 2 | har_factor | 6.752145 | -17.859160 |
+| 3 | random_forest | 7.812179 | -36.362137 |
+| 4 | lightgbm | 10.335272 | -80.402906 |
+| 5 | ridge | 13.764123 | -140.253743 |
+| 6 | elasticnet | 13.931918 | -143.182611 |
+| 7 | neural_surface | 96.921383 | -1591.769586 |
 
 ## Discussion and Limitations
 
@@ -264,9 +264,9 @@ The central empirical lesson is that temporal integrity is not a side issue. It 
 
 The HAR/factor benchmark is the clearest positive exception. It does not win the primary ranking, but it does win the secondary QLIKE metric, it dominates several short-maturity slices, and it ranks second on the official hedging revaluation summary. That pattern is economically plausible. A factor model with multi-horizon lag structure is well suited to a one-session horizon in which most of the surface is persistent but the front end can still move sharply. The saved results suggest that future work should treat HAR-style structure not as a weak classical foil but as a serious benchmark in its own right.
 
-The neural result is negative in a more substantive sense. The saved configuration does not merely fall short of first place; it looks unhealthy. The combination of median best epoch equal to 2, median prediction-to-target ratio around 0.045, and a 67.8% share of predictions below `1e-6` strongly suggests underprediction or collapse. Because QLIKE is extremely punitive when predicted total variance is too close to zero, that collapse naturally explodes the secondary loss. The arbitrage-penalty summary adds another caution: soft penalties can make a model arbitrage-aware without making it arbitrage-free; here, lower price-convexity violation counts coexist with very poor statistical and revaluation performance. A better future neural design would likely need more than different hyperparameters. It would probably require a different output parameterization, a better-calibrated loss, or a stronger structural inductive bias.
+The neural result is negative in a more substantive sense. The saved configuration does not merely fall short of first place; it looks unhealthy. The combination of median best epoch equal to 1, median prediction-to-target ratio around 0.027, and an 86.7% share of predictions below `1e-6` strongly suggests underprediction or collapse. Because QLIKE is extremely punitive when predicted total variance is too close to zero, that collapse naturally explodes the secondary loss. The arbitrage-penalty summary adds another caution: soft penalties can make a model arbitrage-aware without making it arbitrage-free; here, lower price-convexity violation counts coexist with very poor statistical and revaluation performance. A better future neural design would likely need more than different hyperparameters. It would probably require a different output parameterization, a better-calibrated loss, or a stronger structural inductive bias.
 
-The completed-surface representation is another important limitation. Every model is trained and scored against completed total-variance surfaces, and the official observed-cell metrics restrict headline evaluation to the locations that were genuinely observed on the target day. That is a sensible compromise, but it does not make interpolation disappear. The actual completed surfaces themselves exhibit calendar and convexity violations on average, which means the “truth” used in evaluation is already a model-based completion of sparse quotes. Appendix Figure A1 makes the interpolation sensitivity visible: reversing the interpolation order yields a mean RMSE difference of 0.003225 across 4,347 quote dates, and the worst-day maximum absolute cell difference is 1.407986. Most days are much less sensitive than that, but sparse or irregular days can still move materially under alternate completion rules.
+The completed-surface representation is another important limitation. Every model is trained and scored against completed total-variance surfaces, and the official observed-cell metrics restrict headline evaluation to the locations that were genuinely observed on the target day. That is a sensible compromise, but it does not make interpolation disappear. The actual completed surfaces themselves exhibit calendar and convexity violations on average, which means the “truth” used in evaluation is already a model-based completion of sparse quotes. Appendix Figure A1 makes the interpolation sensitivity visible: reversing the interpolation order yields a mean RMSE difference of 0.003354 across 4,347 quote dates, and the worst-day maximum absolute cell difference is 2.567543. Most days are much less sensitive than that, but sparse or irregular days can still move materially under alternate completion rules.
 
 The scope of the study is also intentionally narrow. It concerns one underlying (`^SPX`), one decision timestamp (15:45 ET), one forecast horizon (the next observed trading session), and one fixed 9×9 grid. The feature set is deliberately endogenous, built from lagged surfaces, masks, and liquidity summaries rather than from macro variables, realized-volatility measures, or order-flow features. The hedging exercise is stylized as well: it uses Black-Scholes revaluation on completed surfaces, assumes zero risk-free rate, sizes hedges under a naive spot assumption, and omits transaction costs. None of those choices invalidate the comparison, but all of them limit how far the results can be generalized.
 
@@ -347,31 +347,31 @@ Appendix material collects reproducibility-heavy tables and diagnostics that mat
 | Model | Stage-05 best value | Selected hyperparameters |
 | --- | --- | --- |
 | `naive` | n/a | Lag-1 completed-surface carry-forward |
-| `ridge` | `0.00011775166321408735` | `alpha=97.29560526312258` |
-| `elasticnet` | `0.00011115214657925672` | `alpha=0.06673358872570778`;<br>`l1_ratio=0.8537754503645` |
-| `har_factor` | `0.00011388628600664281` | `n_factors=9`;<br>`alpha=6.644070263467311` |
-| `lightgbm` | `0.00012120207876324272` | `n_estimators=400`;<br>`learning_rate=0.19491481545898576`;<br>`num_leaves=24`;<br>`max_depth=4`;<br>`min_child_samples=10`;<br>`feature_fraction=0.992762737090758`;<br>`lambda_l2=0.35817215902887456`;<br>`n_factors=9` |
-| `random_forest` | `0.00012704734053683054` | `n_estimators=400`;<br>`max_depth=12`;<br>`min_samples_leaf=1` |
+| `ridge` | `0.00011373380478431107` | `alpha=97.2956052631225` |
+| `elasticnet` | `0.00010517596071241086` | `alpha=0.07318748070568248`;<br>`l1_ratio=0.8650179160564369` |
+| `har_factor` | `0.00010790596335050441` | `n_factors=9`;<br>`alpha=75.38868435013475` |
+| `lightgbm` | `0.00010957357286069775` | `n_estimators=400`;<br>`learning_rate=0.011800277461226189`;<br>`num_leaves=60`;<br>`max_depth=3`;<br>`min_child_samples=25`;<br>`feature_fraction=0.996023148831143`;<br>`lambda_l2=0.00010749481010319476`;<br>`n_factors=9` |
+| `random_forest` | `0.00011098236755063946` | `n_estimators=500`;<br>`max_depth=11`;<br>`min_samples_leaf=2` |
 
 *Panel B. Neural model.*
 
 | Model | Stage-05 best value | Selected hyperparameters |
 | --- | --- | --- |
-| `neural_surface` | `0.0009101158672406145` | `hidden_width=384`;<br>`depth=2`;<br>`dropout=0.10712118850586368`;<br>`learning_rate=0.00422336970502679`;<br>`weight_decay=5.138298522573402e-05`;<br>`batch_size=128`;<br>`calendar_penalty_weight=0.006503132708010469`;<br>`convexity_penalty_weight=1.0627295606594362e-05`;<br>`roughness_penalty_weight=0.00035852333027431416` |
+| `neural_surface` | `0.0006605830765860249` | `hidden_width=384`;<br>`depth=2`;<br>`dropout=0.10712118850586368`;<br>`learning_rate=0.00422336970502679`;<br>`weight_decay=5.138298522573402e-05`;<br>`batch_size=128`;<br>`calendar_penalty_weight=0.006503132708010469`;<br>`convexity_penalty_weight=1.0627295606594362e-05`;<br>`roughness_penalty_weight=0.00035852333027431416` |
 
 **Appendix Table A2. Arbitrage-diagnostic summary.**
 
 | model_name | mean_calendar_violation_count | mean_calendar_violation_magnitude | mean_convexity_violation_count | mean_convexity_violation_magnitude | n_surfaces |
 | --- | --- | --- | --- | --- | --- |
-| neural_surface | 6.809524 | 0.000157 | 0.074869 | 0.024715 | 3633 |
-| random_forest | 2.874209 | 0.000396 | 2.228186 | 0.366719 | 3633 |
-| lightgbm | 4.137352 | 0.000515 | 2.150564 | 0.147242 | 3633 |
-| har_factor | 4.128269 | 0.000620 | 2.608863 | 0.408626 | 3633 |
-| naive | 3.646023 | 0.005406 | 3.307459 | 1.310745 | 3633 |
-| actual_surface | 3.513228 | 0.006529 | 3.377042 | 1.692889 | 4347 |
-| elasticnet | 4.268373 | 0.015412 | 2.568951 | 3.653552 | 3633 |
-| ridge | 6.306083 | 0.275690 | 3.331131 | 7.057413 | 3633 |
+| random_forest | 1.960363 | 0.000111 | 2.372419 | 0.444777 | 3633 |
+| neural_surface | 6.150840 | 0.000187 | 0.069639 | 0.022733 | 3633 |
+| lightgbm | 4.036334 | 0.000415 | 2.283237 | 0.101566 | 3633 |
+| har_factor | 4.276356 | 0.000630 | 2.865400 | 0.431172 | 3633 |
+| naive | 3.126342 | 0.003123 | 3.592898 | 1.546821 | 3633 |
+| actual_surface | 3.003911 | 0.004233 | 3.692432 | 1.944201 | 4347 |
+| elasticnet | 3.473438 | 0.019336 | 2.813928 | 4.347004 | 3633 |
+| ridge | 5.652353 | 0.135481 | 3.705753 | 8.492121 | 3633 |
 
 **Appendix Figure A1. Empirical CDF of daily interpolation-order RMSE differences.**
 
-![Interpolation-order sensitivity ECDF.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs__mac_cpu/figures/interpolation_sensitivity_ecdf.svg)
+![Interpolation-order sensitivity ECDF.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs/figures/interpolation_sensitivity_ecdf.svg)
