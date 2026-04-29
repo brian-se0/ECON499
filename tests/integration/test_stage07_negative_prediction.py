@@ -10,7 +10,26 @@ import polars as pl
 import pytest
 from pytest import MonkeyPatch
 
-from ivsurf.training.tuning import TuningResult, write_tuning_result
+from ivsurf.cleaning.derived_fields import DECISION_TIMESTAMP_COLUMN
+from ivsurf.features.availability import TARGET_DECISION_TIMESTAMP_COLUMN
+from ivsurf.surfaces.grid import (
+    MATURITY_COORDINATE,
+    MONEYNESS_COORDINATE,
+    SURFACE_GRID_SCHEMA_VERSION,
+    SurfaceGrid,
+)
+from ivsurf.surfaces.interpolation import (
+    COMPLETED_SURFACE_SCHEMA_VERSION,
+    COMPLETION_STATUS_OBSERVED,
+)
+from ivsurf.training.tuning import (
+    TUNING_RESULT_SCHEMA_VERSION,
+    TuningResult,
+    write_tuning_result,
+)
+
+GRID = SurfaceGrid(maturity_days=(30, 90), moneyness_points=(-0.1, 0.0))
+SURFACE_CONFIG_HASH = "surface-hash"
 
 
 def _load_script_module(script_path: Path, module_name: str) -> ModuleType:
@@ -36,6 +55,7 @@ def _surface_rows(quote_date: date, sigma: float) -> list[dict[str, object]]:
             rows.append(
                 {
                     "quote_date": quote_date,
+                    DECISION_TIMESTAMP_COLUMN: f"{quote_date.isoformat()}T15:45:00-05:00",
                     "maturity_index": maturity_index,
                     "maturity_days": maturity_days,
                     "moneyness_index": moneyness_index,
@@ -45,6 +65,13 @@ def _surface_rows(quote_date: date, sigma: float) -> list[dict[str, object]]:
                     "completed_total_variance": total_variance,
                     "completed_iv": sigma,
                     "observed_mask": True,
+                    "completion_status": COMPLETION_STATUS_OBSERVED,
+                    "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                    "surface_grid_hash": GRID.grid_hash,
+                    "maturity_coordinate": MATURITY_COORDINATE,
+                    "moneyness_coordinate": MONEYNESS_COORDINATE,
+                    "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
+                    "surface_config_hash": SURFACE_CONFIG_HASH,
                     "vega_sum": 1.0,
                 }
             )
@@ -90,15 +117,26 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
             common = {
                 "quote_date": date(2021, 1, 4),
                 "target_date": date(2021, 1, 5),
+                "split_id": "split_0000",
+                DECISION_TIMESTAMP_COLUMN: "2021-01-04T15:45:00-05:00",
+                TARGET_DECISION_TIMESTAMP_COLUMN: "2021-01-05T15:45:00-05:00",
                 "maturity_index": maturity_index,
                 "maturity_days": maturity_days,
                 "moneyness_index": moneyness_index,
                 "moneyness_point": moneyness_point,
+                "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                "surface_grid_hash": GRID.grid_hash,
+                "maturity_coordinate": MATURITY_COORDINATE,
+                "moneyness_coordinate": MONEYNESS_COORDINATE,
+                "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
+                "surface_config_hash": SURFACE_CONFIG_HASH,
             }
             ridge_rows.append(
                 {
                     "model_name": "ridge",
                     **common,
+                    "model_config_hash": "ridge-model-hash",
+                    "training_run_id": "ridge-training-run",
                     "predicted_total_variance": -1.0e-4 if maturity_index == 0 else 0.01,
                 }
             )
@@ -106,6 +144,8 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
                 {
                     "model_name": "naive",
                     **common,
+                    "model_config_hash": "naive-model-hash",
+                    "training_run_id": "naive-training-run",
                     "predicted_total_variance": 0.008,
                 }
             )
@@ -129,6 +169,17 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
         (
             "positive_floor: 1.0e-8\n"
             'primary_loss_metric: "observed_mse_total_variance"\n'
+        ),
+    )
+    surface_config_path = _write_yaml(
+        tmp_path / "surface.yaml",
+        (
+            "moneyness_points:\n"
+            "  - -0.1\n"
+            "  - 0.0\n"
+            "maturity_days:\n"
+            "  - 30\n"
+            "  - 90\n"
         ),
     )
     stats_config_path = _write_yaml(
@@ -173,6 +224,7 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
     )
     write_tuning_result(
         TuningResult(
+            schema_version=TUNING_RESULT_SCHEMA_VERSION,
             model_name="ridge",
             hpo_profile_name="test_hpo",
             training_profile_name="test_train",
@@ -198,10 +250,11 @@ def test_stage07_rejects_negative_forecast_total_variance_before_iv_conversion(
     )
     monkeypatch.setattr(script_module, "TUNABLE_MODEL_NAMES", ("ridge",))
     with pytest.raises(ValueError, match="negative total variance"):
-        script_module.main(
-            raw_config_path=raw_config_path,
-            metrics_config_path=metrics_config_path,
-            stats_config_path=stats_config_path,
+            script_module.main(
+                raw_config_path=raw_config_path,
+                surface_config_path=surface_config_path,
+                metrics_config_path=metrics_config_path,
+                stats_config_path=stats_config_path,
             hpo_profile_config_path=hpo_profile_path,
             training_profile_config_path=training_profile_path,
         )

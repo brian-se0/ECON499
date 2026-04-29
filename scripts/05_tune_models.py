@@ -20,24 +20,32 @@ from ivsurf.config import (
     load_yaml_config,
 )
 from ivsurf.evaluation.loss_panels import mean_daily_loss_metric
-from ivsurf.evaluation.metrics import weighted_rmse
 from ivsurf.exceptions import ModelConvergenceError
 from ivsurf.io.parquet import write_parquet_frame
 from ivsurf.models.base import DatasetMatrices, dataset_to_matrices
 from ivsurf.models.elasticnet import ElasticNetSurfaceModel
+from ivsurf.models.har_factor import validate_har_feature_layout
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
 from ivsurf.models.neural_surface import NeuralSurfaceRegressor
 from ivsurf.progress import create_progress
-from ivsurf.reproducibility import write_run_manifest
+from ivsurf.reproducibility import sha256_file, write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
-from ivsurf.splits.manifests import WalkforwardSplit, load_splits
+from ivsurf.splits.manifests import (
+    WalkforwardSplit,
+    load_split_manifest,
+    require_split_manifest_matches_artifacts,
+)
 from ivsurf.splits.walkforward import clean_evaluation_boundary
 from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.training.fit_lightgbm import fit_and_predict_lightgbm
 from ivsurf.training.fit_sklearn import fit_and_predict
 from ivsurf.training.fit_torch import fit_and_predict_neural
 from ivsurf.training.model_factory import suggest_model_from_trial
-from ivsurf.training.tuning import TuningResult, write_tuning_result
+from ivsurf.training.tuning import (
+    TUNING_RESULT_SCHEMA_VERSION,
+    TuningResult,
+    write_tuning_result,
+)
 from ivsurf.workflow import tuning_diagnostics_path, tuning_manifest_path
 
 app = typer.Typer(add_completion=False)
@@ -46,20 +54,6 @@ app = typer.Typer(add_completion=False)
 def _indices_for_dates(all_dates: np.ndarray, subset: tuple[str, ...]) -> np.ndarray:
     lookup = {str(value): index for index, value in enumerate(all_dates)}
     return np.asarray([lookup[item] for item in subset], dtype=np.int64)
-
-
-def _legacy_pooled_validation_score(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    observed_masks: np.ndarray,
-    vega_weights: np.ndarray,
-) -> float:
-    weights = observed_masks * np.maximum(vega_weights, 0.0)
-    return weighted_rmse(
-        y_true=y_true.reshape(-1),
-        y_pred=y_pred.reshape(-1),
-        weights=weights.reshape(-1),
-    )
 
 
 def _make_pruner(hpo_profile: HpoProfileConfig) -> optuna.pruners.BasePruner:
@@ -208,12 +202,6 @@ def _objective_factory(
                     vega_weights=matrices.vega_weights[validation_index],
                     positive_floor=positive_floor,
                 )
-                legacy_pooled_wrmse = _legacy_pooled_validation_score(
-                    y_true=matrices.targets[validation_index],
-                    y_pred=predictions,
-                    observed_masks=matrices.observed_masks[validation_index],
-                    vega_weights=matrices.vega_weights[validation_index],
-                )
                 scores.append(selected_metric_value)
                 diagnostic_rows.append(
                     {
@@ -227,7 +215,6 @@ def _objective_factory(
                         "selected_metric_name": primary_loss_metric,
                         "selected_metric_value": selected_metric_value,
                         "running_mean_selected_metric": float(np.mean(scores)),
-                        "legacy_pooled_observed_wrmse": legacy_pooled_wrmse,
                         "split_runtime_seconds": perf_counter() - split_started_at,
                         "trial_status": "completed_split",
                         "warning_reason": None,
@@ -258,7 +245,6 @@ def _objective_factory(
                         "running_mean_selected_metric": (
                             None if not scores else float(np.mean(scores))
                         ),
-                        "legacy_pooled_observed_wrmse": None,
                         "split_runtime_seconds": perf_counter() - split_started_at,
                         "trial_status": "pruned",
                         "warning_reason": "elasticnet_convergence_warning",
@@ -284,7 +270,6 @@ def _objective_factory(
                             "running_mean_selected_metric": (
                                 None if not scores else float(np.mean(scores))
                             ),
-                            "legacy_pooled_observed_wrmse": None,
                             "split_runtime_seconds": perf_counter() - split_started_at,
                             "trial_status": "pruned",
                             "warning_reason": "optuna_pruner",
@@ -355,7 +340,7 @@ def main(
                 raw_config.gold_dir / "daily_features.parquet",
                 split_manifest_path,
             ],
-            extra_tokens={"model_name": model_name},
+            extra_tokens={"artifact_schema_version": 2, "model_name": model_name},
         ),
     )
     resume_item_id = model_name
@@ -373,8 +358,20 @@ def main(
     feature_frame = pl.read_parquet(raw_config.gold_dir / "daily_features.parquet").sort(
         "quote_date"
     )
+    feature_dataset_hash = sha256_file(raw_config.gold_dir / "daily_features.parquet")
+    split_manifest = load_split_manifest(split_manifest_path)
+    require_split_manifest_matches_artifacts(
+        split_manifest,
+        date_universe=feature_frame["quote_date"].to_list(),
+        feature_dataset_hash=feature_dataset_hash,
+    )
     matrices = dataset_to_matrices(feature_frame)
-    splits = load_splits(split_manifest_path)
+    if model_name == "har_factor":
+        validate_har_feature_layout(
+            feature_columns=matrices.feature_columns,
+            target_columns=matrices.target_columns,
+        )
+    splits = split_manifest.splits
     tuning_splits = splits[: hpo_profile.tuning_splits_count]
     if not tuning_splits:
         message = "No walk-forward splits available for tuning."
@@ -447,6 +444,7 @@ def main(
         )
         raise RuntimeError(message)
     result = TuningResult(
+        schema_version=TUNING_RESULT_SCHEMA_VERSION,
         model_name=model_name,
         hpo_profile_name=hpo_profile.profile_name,
         training_profile_name=training_profile.profile_name,
@@ -509,7 +507,6 @@ def main(
         extra_metadata={
             **model_metadata,
             "resume_context_hash": resumer.context_hash,
-            "legacy_validation_metric": "pooled_observed_wrmse_total_variance",
         },
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_experiment_name=mlflow_experiment_name,

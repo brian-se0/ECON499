@@ -12,6 +12,7 @@ from ivsurf.config import (
     HedgingConfig,
     HpoProfileConfig,
     RawDataConfig,
+    SurfaceGridConfig,
     TrainingProfileConfig,
     load_yaml_config,
 )
@@ -19,14 +20,22 @@ from ivsurf.evaluation.alignment import (
     assert_forecast_origins_after_hpo_boundary,
     load_actual_surface_frame,
     load_daily_spot_frame,
+    load_forecast_frame,
+    require_forecast_surface_grid,
 )
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
+from ivsurf.hedging.validation import (
+    require_hedging_config_in_surface_domain,
+    require_hedging_results_match_forecast_coverage,
+    require_hedging_summary_matches_results,
+)
 from ivsurf.io.parquet import read_parquet_files, write_parquet_frame
 from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress
 from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
+from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES
 from ivsurf.training.tuning import (
     load_required_tuning_results,
@@ -46,6 +55,7 @@ def _actual_surface_lookup(actual_surface_frame: pl.DataFrame) -> dict[object, p
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
+    surface_config_path: Path = Path("configs/data/surface.yaml"),
     metrics_config_path: Path = Path("configs/eval/metrics.yaml"),
     hedging_config_path: Path = Path("configs/eval/hedging.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
@@ -58,12 +68,14 @@ def main(
 
     started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
+    surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
     metrics_config = EvaluationMetricsConfig.model_validate(load_yaml_config(metrics_config_path))
     hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
     training_profile = TrainingProfileConfig.model_validate(
         load_yaml_config(training_profile_config_path)
     )
     hedging_config = HedgingConfig.model_validate(load_yaml_config(hedging_config_path))
+    grid = SurfaceGrid.from_config(surface_config)
     workflow_paths = resolve_workflow_run_paths(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
@@ -85,14 +97,13 @@ def main(
     ]
     output_dir = workflow_paths.hedging_dir
     by_model_dir = output_dir / "by_model"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    by_model_dir.mkdir(parents=True, exist_ok=True)
     resumer = StageResumer(
         state_path=resume_state_path(raw_config.manifests_dir, "08_run_hedging_eval"),
         stage_name="08_run_hedging_eval",
         context_hash=build_resume_context_hash(
             config_paths=[
                 raw_config_path,
+                surface_config_path,
                 metrics_config_path,
                 hedging_config_path,
                 hpo_profile_config_path,
@@ -108,6 +119,7 @@ def main(
             extra_tokens={
                 "run_profile_name": run_profile_name,
                 "workflow_run_label": workflow_paths.run_label,
+                "artifact_schema_version": 2,
             },
         ),
     )
@@ -122,7 +134,13 @@ def main(
     )
     clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
 
-    actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
+    forecast_frame = load_forecast_frame(workflow_paths.forecast_dir, grid)
+    assert_forecast_origins_after_hpo_boundary(
+        forecast_frame,
+        max_hpo_validation_date=clean_evaluation_policy.max_hpo_validation_date,
+    )
+
+    actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir, grid)
     # For SPX/index data the vendor underlying bid/ask fields may be zero, so stage 08 derives
     # one daily spot contract from the median active_underlying_price_1545 across valid rows.
     spot_frame = load_daily_spot_frame(raw_config.silver_dir)
@@ -130,22 +148,43 @@ def main(
         row["quote_date"]: float(row["spot_1545"]) for row in spot_frame.iter_rows(named=True)
     }
     actual_lookup = _actual_surface_lookup(actual_surface_frame)
+    forecast_calendar_gaps = [
+        (row["target_date"] - row["quote_date"]).days
+        for row in forecast_frame.unique(["quote_date", "target_date"]).iter_rows(named=True)
+    ]
+    if not forecast_calendar_gaps:
+        message = "Stage 08 requires at least one forecast quote/target date pair."
+        raise ValueError(message)
+    require_hedging_config_in_surface_domain(
+        hedging_config,
+        grid,
+        max_target_gap_days=max(forecast_calendar_gaps),
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    by_model_dir.mkdir(parents=True, exist_ok=True)
 
     model_output_paths: list[Path] = []
+    model_names = tuple(
+        str(value)
+        for value in forecast_frame.select("model_name").unique().sort("model_name")[
+            "model_name"
+        ].to_list()
+    )
     with create_progress() as progress:
-        task_id = progress.add_task("Stage 08 hedging evaluation", total=len(forecast_paths))
-        for forecast_path in forecast_paths:
-            forecast_frame = pl.read_parquet(forecast_path).sort(
+        task_id = progress.add_task("Stage 08 hedging evaluation", total=len(model_names))
+        for model_name in model_names:
+            model_forecast_frame = forecast_frame.filter(pl.col("model_name") == model_name).sort(
                 ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
             )
-            assert_forecast_origins_after_hpo_boundary(
-                forecast_frame,
-                max_hpo_validation_date=clean_evaluation_policy.max_hpo_validation_date,
+            require_forecast_surface_grid(
+                model_forecast_frame,
+                grid,
+                dataset_name=f"Forecast artifact for model {model_name}",
             )
-            if forecast_frame.is_empty():
-                message = f"Forecast artifact {forecast_path} is empty."
+            if model_forecast_frame.is_empty():
+                message = f"Forecast artifact for model {model_name} is empty."
                 raise ValueError(message)
-            model_name = str(forecast_frame["model_name"][0])
             model_output_path = by_model_dir / f"{model_name}.parquet"
             model_output_paths.append(model_output_path)
             if resumer.item_complete(model_name, required_output_paths=[model_output_path]):
@@ -159,7 +198,7 @@ def main(
             progress.update(task_id, description=f"Stage 08 hedging model {model_name}")
 
             results: list[dict[str, object]] = []
-            for group in forecast_frame.partition_by(
+            for group in model_forecast_frame.partition_by(
                 ["model_name", "quote_date", "target_date"],
                 maintain_order=True,
             ):
@@ -187,14 +226,17 @@ def main(
                     actual_surface_t=surface_interpolator_from_frame(
                         actual_lookup[quote_date],
                         total_variance_column="completed_total_variance",
+                        grid=grid,
                     ),
                     actual_surface_t1=surface_interpolator_from_frame(
                         actual_lookup[target_date],
                         total_variance_column="completed_total_variance",
+                        grid=grid,
                     ),
                     predicted_surface_t1=surface_interpolator_from_frame(
                         group,
                         total_variance_column="predicted_total_variance",
+                        grid=grid,
                     ),
                     rate=hedging_config.risk_free_rate,
                     level_notional=hedging_config.level_notional,
@@ -205,6 +247,7 @@ def main(
                     long_maturity_days=hedging_config.long_maturity_days,
                     hedge_maturity_days=hedging_config.hedge_maturity_days,
                     hedge_straddle_moneyness=hedging_config.hedge_straddle_moneyness,
+                    hedge_vega_floor=hedging_config.hedge_vega_floor,
                 )
                 results.append(asdict(result))
 
@@ -222,8 +265,10 @@ def main(
     )
     hedging_results_path = output_dir / "hedging_results.parquet"
     hedging_summary_path = output_dir / "hedging_summary.parquet"
+    require_hedging_results_match_forecast_coverage(results_frame, forecast_frame)
     write_parquet_frame(results_frame, hedging_results_path)
     summary_frame = summarize_hedging_results(results_frame)
+    require_hedging_summary_matches_results(summary_frame, results_frame)
     write_parquet_frame(summary_frame, hedging_summary_path)
     run_manifest_path = write_run_manifest(
         manifests_dir=raw_config.manifests_dir,
@@ -232,6 +277,7 @@ def main(
         started_at=started_at,
         config_paths=[
             raw_config_path,
+            surface_config_path,
             metrics_config_path,
             hedging_config_path,
             hpo_profile_config_path,

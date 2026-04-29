@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import math
+from collections.abc import Sequence
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -62,7 +62,7 @@ def _interpolate_hex_color(start: str, end: str, fraction: float) -> str:
     start_rgb = _hex_to_rgb(start)
     end_rgb = _hex_to_rgb(end)
     blended = tuple(
-        int(round(start_channel + ((end_channel - start_channel) * bounded_fraction)))
+        round(start_channel + ((end_channel - start_channel) * bounded_fraction))
         for start_channel, end_channel in zip(start_rgb, end_rgb, strict=True)
     )
     return _rgb_to_hex(blended)
@@ -470,7 +470,9 @@ def write_surface_heatmap(
 
     x_values = sorted({float(value) for value in frame[x_column].to_list()})
     y_values = sorted({float(value) for value in frame[y_column].to_list()})
-    max_improvement = max(float(value) for value in frame[improvement_column].fill_null(0.0).to_list())
+    max_improvement = max(
+        float(value) for value in frame[improvement_column].fill_null(0.0).to_list()
+    )
 
     width = 1140
     height = 760
@@ -495,7 +497,7 @@ def write_surface_heatmap(
             f'<text x="24" y="36" font-size="22" font-family="Segoe UI">{escape(title)}</text>'
         ),
         (
-            f'<text x="24" y="60" font-size="13" font-family="Segoe UI" fill="#5c5140">'
+            '<text x="24" y="60" font-size="13" font-family="Segoe UI" fill="#5c5140">'
             'Cell fill shows improvement versus naive; cell text shows the winning model.</text>'
         ),
         (
@@ -515,19 +517,20 @@ def write_surface_heatmap(
     for x_value in x_values:
         x_pos = margin_left + (x_lookup[x_value] * cell_width)
         body.append(
-            (
-                f'<text x="{x_pos + (cell_width / 2):.2f}" y="{margin_top + plot_height + 24}" '
-                f'text-anchor="middle" font-size="12" font-family="Consolas">{x_value:+.2f}</text>'
-            )
+
+                f'<text x="{x_pos + (cell_width / 2):.2f}" '
+                f'y="{margin_top + plot_height + 24}" text-anchor="middle" font-size="12" '
+                f'font-family="Consolas">{x_value:+.2f}</text>'
+
         )
 
     for y_value in y_values:
         y_pos = margin_top + (y_lookup[y_value] * cell_height)
         body.append(
-            (
+
                 f'<text x="{margin_left - 12}" y="{y_pos + (cell_height / 2) + 4:.2f}" '
                 f'text-anchor="end" font-size="12" font-family="Consolas">{int(y_value)}</text>'
-            )
+
         )
 
     for row in frame.iter_rows(named=True):
@@ -579,7 +582,8 @@ def write_surface_heatmap(
                 'fill="url(#surface-improvement-scale)" stroke="#d9d3c7" />'
             ),
             (
-                f'<text x="{legend_x}" y="{legend_y + 44}" font-size="12" font-family="Consolas">0.0%</text>'
+                f'<text x="{legend_x}" y="{legend_y + 44}" font-size="12" '
+                'font-family="Consolas">0.0%</text>'
             ),
             (
                 f'<text x="{legend_x + 170}" y="{legend_y + 44}" text-anchor="end" '
@@ -594,11 +598,11 @@ def write_surface_heatmap(
 
     for index, model_name in enumerate(present_models):
         body.append(
-            (
+
                 f'<text x="{legend_x}" y="{legend_y + 106 + (index * 22)}" '
                 f'font-size="12" font-family="Segoe UI">{escape(_model_abbreviation(model_name))}'
                 f" = {escape(model_name)}</text>"
-            )
+
         )
 
     return _write_svg(output_path, _svg_wrapper(width, height, body))
@@ -702,7 +706,8 @@ def write_ecdf_chart(
                 ),
                 (
                     f'<text x="{x_pos:.2f}" y="{margin_top + plot_height + 18}" '
-                    f'text-anchor="middle" font-size="12" font-family="Consolas">{x_value:.4f}</text>'
+                    f'text-anchor="middle" font-size="12" font-family="Consolas">'
+                    f"{x_value:.4f}</text>"
                 ),
             ]
         )

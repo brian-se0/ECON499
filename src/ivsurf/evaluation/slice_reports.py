@@ -8,6 +8,10 @@ import numpy as np
 import polars as pl
 
 from ivsurf.config import StressWindowConfig
+from ivsurf.evaluation.metric_contracts import (
+    require_observed_weight_contract,
+    require_positive_observed_weight_sum,
+)
 from ivsurf.evaluation.metrics import qlike, weighted_mae, weighted_mse, weighted_rmse
 
 
@@ -33,14 +37,46 @@ class SliceMetricRow:
 
 def _scope_weights(frame: pl.DataFrame, evaluation_scope: str) -> tuple[pl.DataFrame, np.ndarray]:
     if evaluation_scope == "observed":
+        observed_mask, observed_weights = require_observed_weight_contract(
+            observed_mask=frame["actual_observed_mask"].to_numpy(),
+            observed_weight=frame["observed_weight"].to_numpy(),
+            context="Slice report panel",
+        )
         scoped = frame.filter(pl.col("actual_observed_mask"))
-        weights = scoped["observed_weight"].to_numpy().astype(np.float64)
-        return scoped, weights
+        return scoped, observed_weights[observed_mask]
     if evaluation_scope == "full":
         scoped = frame
         return scoped, np.ones(scoped.height, dtype=np.float64)
     message = f"Unsupported evaluation_scope: {evaluation_scope}"
     raise ValueError(message)
+
+
+def _nan_metric_row(
+    frame: pl.DataFrame,
+    scoped: pl.DataFrame,
+    *,
+    slice_family: str,
+    slice_label: str,
+    slice_value_float: float | None,
+    evaluation_scope: str,
+) -> SliceMetricRow:
+    nan = float("nan")
+    return SliceMetricRow(
+        model_name=str(frame["model_name"][0]),
+        slice_family=slice_family,
+        slice_label=slice_label,
+        slice_value_float=slice_value_float,
+        evaluation_scope=evaluation_scope,
+        wrmse_total_variance=nan,
+        wmae_total_variance=nan,
+        mse_total_variance=nan,
+        wrmse_iv=nan,
+        wmae_iv=nan,
+        mse_iv_change=nan,
+        qlike_total_variance=nan,
+        cell_count=scoped.height,
+        target_day_count=0 if scoped.is_empty() else int(scoped["target_date"].n_unique()),
+    )
 
 
 def _build_metric_row(
@@ -54,22 +90,18 @@ def _build_metric_row(
 ) -> SliceMetricRow:
     scoped, weights = _scope_weights(frame, evaluation_scope)
     if scoped.is_empty():
-        nan = float("nan")
-        return SliceMetricRow(
-            model_name=str(frame["model_name"][0]),
+        return _nan_metric_row(
+            frame,
+            scoped,
             slice_family=slice_family,
             slice_label=slice_label,
             slice_value_float=slice_value_float,
             evaluation_scope=evaluation_scope,
-            wrmse_total_variance=nan,
-            wmae_total_variance=nan,
-            mse_total_variance=nan,
-            wrmse_iv=nan,
-            wmae_iv=nan,
-            mse_iv_change=nan,
-            qlike_total_variance=nan,
-            cell_count=0,
-            target_day_count=0,
+        )
+    if evaluation_scope == "observed":
+        require_positive_observed_weight_sum(
+            weights,
+            metric_name="observed slice metrics",
         )
 
     return SliceMetricRow(

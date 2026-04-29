@@ -7,7 +7,18 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
+from ivsurf.evaluation.metric_contracts import (
+    require_binary_mask_array,
+    require_finite_array,
+    require_nonnegative_weights,
+    require_observed_weight_contract,
+    require_positive_observed_weight_sum,
+)
 from ivsurf.evaluation.metrics import qlike, weighted_mae, weighted_mse, weighted_rmse
+from ivsurf.surfaces.interpolation import (
+    COMPLETION_STATUS_EXTRAPOLATED,
+    COMPLETION_STATUS_INTERPOLATED,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +35,8 @@ class DailyLossRow:
     observed_wmae_iv: float
     observed_mse_iv_change: float
     observed_qlike_total_variance: float
+    interpolated_cell_count: int
+    extrapolated_cell_count: int
     full_wrmse_total_variance: float
     full_wmae_total_variance: float
     full_mse_total_variance: float
@@ -67,15 +80,35 @@ def daily_loss_metric_values(
         )
         raise ValueError(message)
 
+    actual_values = require_finite_array(y_true, context="Validation daily-loss y_true")
+    predicted_values = require_finite_array(y_pred, context="Validation daily-loss y_pred")
+    observed_mask_values = require_binary_mask_array(
+        observed_masks,
+        context="Validation daily-loss observed_masks",
+    )
+    vega_weight_values = require_nonnegative_weights(
+        vega_weights,
+        context="Validation daily-loss vega_weights",
+    )
+    invalid_observed_weights = observed_mask_values & (vega_weight_values <= 0.0)
+    if invalid_observed_weights.any():
+        message = (
+            "Validation daily-loss observed cells must have strictly positive vega_weights; "
+            f"invalid_count={int(invalid_observed_weights.sum())}."
+        )
+        raise ValueError(message)
+    if y_true.shape[0] == 0:
+        message = "Validation daily-loss inputs must contain at least one validation surface."
+        raise ValueError(message)
+
     rows: list[float] = []
     for row_index in range(y_true.shape[0]):
-        actual_row = np.asarray(y_true[row_index], dtype=np.float64)
-        predicted_row = np.asarray(y_pred[row_index], dtype=np.float64)
-        observed_mask_row = np.asarray(observed_masks[row_index], dtype=np.float64) > 0.5
-        observed_weights = np.asarray(
-            np.maximum(vega_weights[row_index], 0.0),
-            dtype=np.float64,
-        )[observed_mask_row]
+        actual_row = actual_values[row_index]
+        predicted_row = predicted_values[row_index]
+        observed_mask_row = observed_mask_values[row_index]
+        observed_weights = vega_weight_values[row_index][observed_mask_row]
+        if metric_name.startswith("observed_"):
+            require_positive_observed_weight_sum(observed_weights, metric_name=metric_name)
 
         match metric_name:
             case "observed_wrmse_total_variance":
@@ -170,8 +203,28 @@ def build_daily_loss_frame(
     rows: list[DailyLossRow] = []
     grouped = panel.partition_by(["model_name", "quote_date", "target_date"], maintain_order=True)
     for group in grouped:
+        observed_mask, observed_weight_values = require_observed_weight_contract(
+            observed_mask=group["actual_observed_mask"].to_numpy(),
+            observed_weight=group["observed_weight"].to_numpy(),
+            context=(
+                "Daily loss panel "
+                f"model={group['model_name'][0]!r} "
+                f"quote_date={group['quote_date'][0]!r} "
+                f"target_date={group['target_date'][0]!r}"
+            ),
+        )
         observed_group = group.filter(pl.col("actual_observed_mask"))
-        observed_weights = observed_group["observed_weight"].to_numpy().astype(np.float64)
+        interpolated_group = group.filter(
+            pl.col("actual_completion_status") == COMPLETION_STATUS_INTERPOLATED
+        )
+        extrapolated_group = group.filter(
+            pl.col("actual_completion_status") == COMPLETION_STATUS_EXTRAPOLATED
+        )
+        observed_weights = observed_weight_values[observed_mask]
+        require_positive_observed_weight_sum(
+            observed_weights,
+            metric_name="observed daily loss metrics",
+        )
         full_weights = _full_grid_weights(group, full_grid_weighting)
         rows.append(
             DailyLossRow(
@@ -183,50 +236,45 @@ def build_daily_loss_frame(
                     y_pred=observed_group["predicted_total_variance"].to_numpy(),
                     weights=observed_weights,
                 )
-                if observed_group.height > 0
-                else float("nan"),
+                ,
                 observed_wmae_total_variance=weighted_mae(
                     y_true=observed_group["actual_completed_total_variance"].to_numpy(),
                     y_pred=observed_group["predicted_total_variance"].to_numpy(),
                     weights=observed_weights,
                 )
-                if observed_group.height > 0
-                else float("nan"),
+                ,
                 observed_mse_total_variance=weighted_mse(
                     y_true=observed_group["actual_completed_total_variance"].to_numpy(),
                     y_pred=observed_group["predicted_total_variance"].to_numpy(),
                     weights=observed_weights,
                 )
-                if observed_group.height > 0
-                else float("nan"),
+                ,
                 observed_wrmse_iv=weighted_rmse(
                     y_true=observed_group["actual_completed_iv"].to_numpy(),
                     y_pred=observed_group["predicted_iv"].to_numpy(),
                     weights=observed_weights,
                 )
-                if observed_group.height > 0
-                else float("nan"),
+                ,
                 observed_wmae_iv=weighted_mae(
                     y_true=observed_group["actual_completed_iv"].to_numpy(),
                     y_pred=observed_group["predicted_iv"].to_numpy(),
                     weights=observed_weights,
                 )
-                if observed_group.height > 0
-                else float("nan"),
+                ,
                 observed_mse_iv_change=weighted_mse(
                     y_true=observed_group["actual_iv_change"].to_numpy(),
                     y_pred=observed_group["predicted_iv_change"].to_numpy(),
                     weights=observed_weights,
                 )
-                if observed_group.height > 0
-                else float("nan"),
+                ,
                 observed_qlike_total_variance=qlike(
                     y_true=observed_group["actual_completed_total_variance"].to_numpy(),
                     y_pred=observed_group["predicted_total_variance"].to_numpy(),
                     positive_floor=positive_floor,
                 )
-                if observed_group.height > 0
-                else float("nan"),
+                ,
+                interpolated_cell_count=interpolated_group.height,
+                extrapolated_cell_count=extrapolated_group.height,
                 full_wrmse_total_variance=weighted_rmse(
                     y_true=group["actual_completed_total_variance"].to_numpy(),
                     y_pred=group["predicted_total_variance"].to_numpy(),

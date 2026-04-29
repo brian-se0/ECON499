@@ -7,18 +7,16 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from ivsurf.surfaces.grid import SurfaceGrid
+from ivsurf.surfaces.grid import SurfaceGrid, require_complete_unique_surface_grid
 
 
 def _ordered_surface_frame(frame: pl.DataFrame, grid: SurfaceGrid) -> pl.DataFrame:
+    require_complete_unique_surface_grid(
+        frame,
+        grid,
+        dataset_name="Dense surface frame",
+    )
     ordered = frame.sort(["maturity_index", "moneyness_index"])
-    expected_rows = grid.shape[0] * grid.shape[1]
-    if ordered.height != expected_rows:
-        message = (
-            f"Expected exactly {expected_rows} rows for one dense surface, "
-            f"found {ordered.height}."
-        )
-        raise ValueError(message)
     return ordered
 
 

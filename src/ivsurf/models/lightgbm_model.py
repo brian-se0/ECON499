@@ -19,14 +19,17 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
 
     def __init__(self, **params: Any) -> None:
         self.params = dict(params)
-        raw_n_factors = self.params.pop("n_factors", 4)
-        if not isinstance(raw_n_factors, int | float | str):
+        if "n_factors" not in self.params:
+            message = "LightGBM params must include integer n_factors."
+            raise KeyError(message)
+        raw_n_factors = self.params.pop("n_factors")
+        if isinstance(raw_n_factors, bool) or not isinstance(raw_n_factors, int):
             message = (
-                "LightGBM n_factors must be integer-like, found "
-                f"{type(raw_n_factors).__name__}."
+                "LightGBM n_factors must be an integer, "
+                f"found {type(raw_n_factors).__name__}."
             )
             raise TypeError(message)
-        self.n_factors = int(raw_n_factors)
+        self.n_factors = raw_n_factors
         if self.n_factors <= 0:
             message = f"LightGBM n_factors must be positive, found {self.n_factors}."
             raise ValueError(message)
@@ -120,12 +123,20 @@ class LightGBMSurfaceModel(SurfaceForecastModel):
         if not self.estimators or self.factorizer is None:
             message = "LightGBMSurfaceModel must be fit before predict."
             raise ValueError(message)
+        predict_kwargs: dict[str, Any] = {}
+        n_jobs = self.params.get("n_jobs")
+        if n_jobs is not None:
+            if isinstance(n_jobs, bool) or not isinstance(n_jobs, int):
+                message = f"LightGBM n_jobs must be an integer, found {type(n_jobs).__name__}."
+                raise TypeError(message)
+            predict_kwargs["num_threads"] = n_jobs
         factor_predictions = np.column_stack(
             [
                 np.asarray(
                     estimator.booster_.predict(
                         features,
                         num_iteration=best_iteration,
+                        **predict_kwargs,
                     ),
                     dtype=np.float64,
                 )

@@ -10,12 +10,14 @@ from sklearn.exceptions import ConvergenceWarning
 
 from ivsurf.config import NeuralModelConfig, TrainingProfileConfig
 from ivsurf.exceptions import ModelConvergenceError
+from ivsurf.models import neural_surface as neural_surface_module
 from ivsurf.models.elasticnet import ElasticNetSurfaceModel
+from ivsurf.models.har_factor import validate_har_feature_layout
 from ivsurf.models.lightgbm_model import LightGBMSurfaceModel
 from ivsurf.models.naive import validate_naive_feature_layout
 from ivsurf.models.neural_surface import NeuralSurfaceRegressor
 from ivsurf.models.ridge import RidgeSurfaceModel
-from ivsurf.training.model_factory import suggest_model_from_trial
+from ivsurf.training.model_factory import make_model_from_params, suggest_model_from_trial
 
 
 def _fit_small_lightgbm_model() -> tuple[LightGBMSurfaceModel, np.ndarray]:
@@ -52,6 +54,8 @@ def _fit_small_lightgbm_model() -> tuple[LightGBMSurfaceModel, np.ndarray]:
         objective="regression",
         metric="l2",
         verbosity=-1,
+        n_jobs=1,
+        random_state=7,
     )
     model.fit(
         features=train_features,
@@ -79,6 +83,9 @@ def test_neural_training_uses_validation_early_stopping() -> None:
         batch_size=4,
         seed=7,
         device="cpu",
+        calendar_penalty_weight=0.0,
+        convexity_penalty_weight=0.0,
+        roughness_penalty_weight=0.0,
     )
     training_profile = TrainingProfileConfig(
         profile_name="test_train_profile",
@@ -147,6 +154,9 @@ def test_neural_prediction_reuses_train_window_standardization_and_stays_positiv
             batch_size=2,
             seed=7,
             device="cpu",
+            calendar_penalty_weight=0.0,
+            convexity_penalty_weight=0.0,
+            roughness_penalty_weight=0.0,
         ),
         grid_shape=(1, 2),
         moneyness_points=(-0.1, 0.0),
@@ -178,6 +188,59 @@ def test_neural_prediction_reuses_train_window_standardization_and_stays_positiv
     assert predictions.shape == (2, 2)
     assert np.isfinite(predictions).all()
     assert (predictions > 0.0).all()
+
+
+def test_neural_regressor_rejects_enabled_roughness_penalty_on_too_small_grid() -> None:
+    with pytest.raises(ValueError, match="roughness_penalty_weight"):
+        NeuralSurfaceRegressor(
+            config=NeuralModelConfig(
+                device="cpu",
+                calendar_penalty_weight=0.0,
+                convexity_penalty_weight=0.0,
+                roughness_penalty_weight=0.005,
+            ),
+            grid_shape=(2, 2),
+            moneyness_points=(-0.1, 0.0),
+        )
+
+
+def test_neural_training_rejects_nonfinite_penalty_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def nonfinite_roughness_penalty(
+        predictions: neural_surface_module.torch.Tensor,
+        grid_shape: tuple[int, int],
+    ) -> neural_surface_module.torch.Tensor:
+        return predictions.new_tensor(float("nan"))
+
+    monkeypatch.setattr(neural_surface_module, "roughness_penalty", nonfinite_roughness_penalty)
+    model = NeuralSurfaceRegressor(
+        config=NeuralModelConfig(
+            hidden_width=4,
+            depth=1,
+            dropout=0.0,
+            learning_rate=1.0e-3,
+            weight_decay=0.0,
+            epochs=1,
+            batch_size=2,
+            seed=7,
+            device="cpu",
+            calendar_penalty_weight=0.0,
+            convexity_penalty_weight=0.0,
+            roughness_penalty_weight=0.005,
+        ),
+        grid_shape=(3, 3),
+        moneyness_points=(-0.1, 0.0, 0.1),
+    )
+
+    with pytest.raises(RuntimeError, match="non-finite scalar loss"):
+        model.fit(
+            features=np.ones((2, 2), dtype=np.float64),
+            targets=np.full((2, 9), 0.1, dtype=np.float64),
+            observed_masks=np.ones((2, 9), dtype=np.float64),
+            vega_weights=np.ones((2, 9), dtype=np.float64),
+            training_weights=np.ones((2, 9), dtype=np.float64),
+        )
 
 
 def test_lightgbm_training_uses_validation_early_stopping() -> None:
@@ -350,4 +413,158 @@ def test_naive_feature_layout_guard_rejects_missing_or_reordered_lag1_columns() 
         validate_naive_feature_layout(
             feature_columns=feature_columns,
             target_columns=target_columns,
+        )
+
+
+def test_har_feature_layout_guard_accepts_aligned_har_lag_blocks() -> None:
+    target_columns = ("target_total_variance_0000", "target_total_variance_0001")
+    feature_columns = (
+        "feature_surface_mean_01_0000",
+        "feature_surface_mean_01_0001",
+        "feature_surface_mean_05_0000",
+        "feature_surface_mean_05_0001",
+        "feature_surface_mean_22_0000",
+        "feature_surface_mean_22_0001",
+        "feature_surface_change_01_0000",
+    )
+
+    validate_har_feature_layout(
+        feature_columns=feature_columns,
+        target_columns=target_columns,
+    )
+
+
+def test_har_feature_layout_guard_rejects_missing_or_reordered_lag_blocks() -> None:
+    target_columns = ("target_total_variance_0000", "target_total_variance_0001")
+    feature_columns = (
+        "feature_surface_mean_01_0000",
+        "feature_surface_mean_01_0001",
+        "feature_surface_mean_22_0000",
+        "feature_surface_mean_22_0001",
+        "feature_surface_mean_05_0000",
+        "feature_surface_mean_05_0001",
+    )
+
+    with pytest.raises(ValueError, match="lag-1, lag-5, and lag-22"):
+        validate_har_feature_layout(
+            feature_columns=feature_columns,
+            target_columns=target_columns,
+        )
+
+
+def test_model_factory_rejects_string_numeric_hyperparameters() -> None:
+    with pytest.raises(TypeError, match="alpha"):
+        make_model_from_params(
+            model_name="ridge",
+            params={"alpha": "1.0"},
+            target_dim=2,
+            grid_shape=(1, 2),
+            moneyness_points=(-0.1, 0.0),
+            base_neural_config=NeuralModelConfig(device="cpu"),
+        )
+
+
+def test_model_factory_rejects_float_integer_hyperparameters() -> None:
+    with pytest.raises(TypeError, match="max_iter"):
+        make_model_from_params(
+            model_name="elasticnet",
+            params={"alpha": 0.1, "l1_ratio": 0.5, "max_iter": 50_000.5, "tol": 1.0e-4},
+            target_dim=2,
+            grid_shape=(1, 2),
+            moneyness_points=(-0.1, 0.0),
+            base_neural_config=NeuralModelConfig(device="cpu"),
+        )
+
+
+def test_model_factory_rejects_string_lightgbm_integer_params() -> None:
+    params: dict[str, object] = {
+        "n_factors": 2,
+        "device_type": "cpu",
+        "n_estimators": "100",
+        "learning_rate": 0.05,
+        "num_leaves": 31,
+        "max_depth": 6,
+        "min_child_samples": 20,
+        "feature_fraction": 0.9,
+        "lambda_l2": 1.0,
+        "objective": "regression",
+        "metric": "l2",
+        "verbosity": -1,
+        "n_jobs": -1,
+        "random_state": 7,
+    }
+
+    with pytest.raises(TypeError, match="n_estimators"):
+        make_model_from_params(
+            model_name="lightgbm",
+            params=params,
+            target_dim=2,
+            grid_shape=(1, 2),
+            moneyness_points=(-0.1, 0.0),
+            base_neural_config=NeuralModelConfig(device="cpu"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_name", "params"),
+    [
+        ("naive", {"unused": 1}),
+        ("ridge", {"alpha": 1.0, "unused": 1}),
+        (
+            "elasticnet",
+            {
+                "alpha": 0.1,
+                "l1_ratio": 0.5,
+                "max_iter": 50_000,
+                "tol": 1.0e-4,
+                "unused": 1,
+            },
+        ),
+        ("har_factor", {"n_factors": 2, "alpha": 1.0, "unused": 1}),
+        (
+            "random_forest",
+            {
+                "n_estimators": 100,
+                "max_depth": 4,
+                "min_samples_leaf": 1,
+                "random_state": 7,
+                "n_jobs": -1,
+                "unused": 1,
+            },
+        ),
+        (
+            "lightgbm",
+            {
+                "n_factors": 2,
+                "device_type": "cpu",
+                "n_estimators": 100,
+                "learning_rate": 0.05,
+                "num_leaves": 31,
+                "max_depth": 6,
+                "min_child_samples": 20,
+                "feature_fraction": 0.9,
+                "lambda_l2": 1.0,
+                "objective": "regression",
+                "metric": "l2",
+                "verbosity": -1,
+                "n_jobs": -1,
+                "random_state": 7,
+                "unused": 1,
+            },
+        ),
+        ("neural_surface", {"hidden_width": 64, "depth": 2, "unused": 1}),
+    ],
+)
+def test_model_factory_rejects_unexpected_persisted_params(
+    model_name: str,
+    params: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match=f"Unexpected {model_name} parameters"):
+        make_model_from_params(
+            model_name=model_name,
+            params=params,
+            target_dim=2,
+            grid_shape=(1, 2),
+            moneyness_points=(-0.1, 0.0),
+            base_neural_config=NeuralModelConfig(device="cpu"),
         )

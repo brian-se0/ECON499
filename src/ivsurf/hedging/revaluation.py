@@ -12,6 +12,10 @@ from scipy.stats import norm
 
 from ivsurf.evaluation.metrics import validate_total_variance_array
 from ivsurf.hedging.book import BookInstrument
+from ivsurf.surfaces.grid import (
+    SurfaceGrid,
+    require_complete_unique_surface_grid,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +39,10 @@ class BookValuation:
     total_vega: float
 
 
+class SurfaceDomainError(ValueError):
+    """Raised when hedging valuation requests a surface coordinate outside the grid."""
+
+
 class SurfaceInterpolator:
     """Bilinear interpolator over a completed total-variance surface."""
 
@@ -54,43 +62,87 @@ class SurfaceInterpolator:
         self._interpolator = RegularGridInterpolator(
             (self.maturity_days, self.moneyness_points),
             self.total_variance_grid,
-            bounds_error=False,
-            fill_value=None,
+            bounds_error=True,
         )
 
-    def sigma(self, remaining_days: int, log_moneyness: float) -> float:
-        clipped_days = float(
-            np.clip(
-                remaining_days,
-                self.maturity_days.min(),
-                self.maturity_days.max(),
-            )
+    def _require_in_domain(
+        self,
+        *,
+        remaining_days: int,
+        log_moneyness: float,
+        instrument_label: str | None,
+        valuation_date: date | None,
+        model_name: str | None,
+    ) -> tuple[float, float]:
+        query_days = float(remaining_days)
+        query_moneyness = float(log_moneyness)
+        maturity_min = float(self.maturity_days.min())
+        maturity_max = float(self.maturity_days.max())
+        moneyness_min = float(self.moneyness_points.min())
+        moneyness_max = float(self.moneyness_points.max())
+        if (
+            np.isfinite(query_days)
+            and np.isfinite(query_moneyness)
+            and maturity_min <= query_days <= maturity_max
+            and moneyness_min <= query_moneyness <= moneyness_max
+        ):
+            return query_days, query_moneyness
+        context_parts = []
+        if model_name is not None:
+            context_parts.append(f"model_name={model_name}")
+        if instrument_label is not None:
+            context_parts.append(f"instrument_label={instrument_label}")
+        if valuation_date is not None:
+            context_parts.append(f"valuation_date={valuation_date.isoformat()}")
+        context = "unknown context" if not context_parts else ", ".join(context_parts)
+        message = (
+            "Surface interpolation query is outside the configured grid domain: "
+            f"remaining_days={query_days!r}, maturity_bounds=({maturity_min!r}, "
+            f"{maturity_max!r}), log_moneyness={query_moneyness!r}, "
+            f"moneyness_bounds=({moneyness_min!r}, {moneyness_max!r}), {context}."
         )
-        clipped_moneyness = float(
-            np.clip(
-                log_moneyness,
-                self.moneyness_points.min(),
-                self.moneyness_points.max(),
-            )
+        raise SurfaceDomainError(message)
+
+    def sigma(
+        self,
+        remaining_days: int,
+        log_moneyness: float,
+        *,
+        instrument_label: str | None = None,
+        valuation_date: date | None = None,
+        model_name: str | None = None,
+    ) -> float:
+        query_days, query_moneyness = self._require_in_domain(
+            remaining_days=remaining_days,
+            log_moneyness=log_moneyness,
+            instrument_label=instrument_label,
+            valuation_date=valuation_date,
+            model_name=model_name,
         )
         total_variance = float(
-            self._interpolator(np.asarray([[clipped_days, clipped_moneyness]])).item()
+            self._interpolator(np.asarray([[query_days, query_moneyness]])).item()
         )
         validate_total_variance_array(
             np.asarray([total_variance], dtype=np.float64),
             context="SurfaceInterpolator interpolated total variance",
             allow_zero=True,
         )
-        tau_years = max(clipped_days / 365.0, 1.0e-12)
+        tau_years = max(query_days / 365.0, 1.0e-12)
         return float(np.sqrt(total_variance / tau_years))
 
 
 def surface_interpolator_from_frame(
     frame: pl.DataFrame,
     total_variance_column: str,
+    grid: SurfaceGrid,
 ) -> SurfaceInterpolator:
     """Build a surface interpolator from one long-form daily surface frame."""
 
+    require_complete_unique_surface_grid(
+        frame,
+        grid,
+        dataset_name="Surface interpolator frame",
+    )
     ordered = frame.sort(["maturity_index", "moneyness_index"])
     maturity_days = ordered["maturity_days"].unique().sort().to_numpy()
     moneyness_points = ordered["moneyness_point"].unique().sort().to_numpy()
@@ -164,6 +216,7 @@ def value_instrument(
     spot: float,
     surface: SurfaceInterpolator,
     rate: float,
+    model_name: str | None = None,
 ) -> OptionValuation:
     """Value one carried option under the provided date/spot/surface state."""
 
@@ -176,7 +229,13 @@ def value_instrument(
     remaining_days = instrument.initial_maturity_days - elapsed_days
     tau_years = max(remaining_days / 365.0, 0.0)
     log_moneyness = float(np.log(instrument.strike / validated_spot))
-    sigma = surface.sigma(max(remaining_days, 1), log_moneyness)
+    sigma = surface.sigma(
+        remaining_days,
+        log_moneyness,
+        instrument_label=instrument.label,
+        valuation_date=valuation_date,
+        model_name=model_name,
+    )
     price, delta, vega = black_scholes_value(
         spot=validated_spot,
         strike=instrument.strike,
@@ -201,6 +260,7 @@ def value_book(
     spot: float,
     surface: SurfaceInterpolator,
     rate: float,
+    model_name: str | None = None,
 ) -> BookValuation:
     """Aggregate book value, delta, and vega."""
 
@@ -211,6 +271,7 @@ def value_book(
             spot=spot,
             surface=surface,
             rate=rate,
+            model_name=model_name,
         )
         for instrument in instruments
     ]

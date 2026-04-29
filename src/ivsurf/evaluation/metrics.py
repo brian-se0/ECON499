@@ -6,9 +6,19 @@ import numpy as np
 
 
 def _normalize_weights(weights: np.ndarray) -> np.ndarray:
+    if weights.size == 0:
+        message = "Weighted metric requires at least one weight."
+        raise ValueError(message)
+    if not np.isfinite(weights).all():
+        message = "Weighted metric weights must be finite."
+        raise ValueError(message)
+    if (weights < 0.0).any():
+        message = "Weighted metric weights must be non-negative."
+        raise ValueError(message)
     total = weights.sum()
     if total <= 0.0:
-        return np.asarray(np.full_like(weights, 1.0 / weights.size, dtype=np.float64))
+        message = "Weighted metric requires a strictly positive total weight."
+        raise ValueError(message)
     return np.asarray(weights / total, dtype=np.float64)
 
 
@@ -23,11 +33,7 @@ def weighted_mae(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray) ->
 
 
 def weighted_mse(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarray) -> float:
-    normalized = weights.astype(np.float64, copy=False)
-    total = normalized.sum()
-    if total <= 0.0:
-        return float(np.mean(np.square(y_true - y_pred)))
-    normalized = normalized / total
+    normalized = _normalize_weights(weights.astype(np.float64, copy=False))
     return float(np.sum(normalized * np.square(y_true - y_pred)))
 
 

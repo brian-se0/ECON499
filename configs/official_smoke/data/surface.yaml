@@ -1,9 +1,11 @@
 moneyness_points:
   - -0.10
   - 0.00
+  - 0.10
 maturity_days:
   - 7
   - 30
+  - 60
 interpolation_order:
   - "maturity"
   - "moneyness"

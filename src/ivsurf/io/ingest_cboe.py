@@ -27,6 +27,9 @@ class IngestionResult:
     source_zip: Path
     quote_date: date
     bronze_path: Path | None
+    raw_row_count: int
+    target_symbol_row_count: int
+    non_target_symbol_row_count: int
     row_count: int
     status: str
 
@@ -65,8 +68,22 @@ def ingest_one_zip(zip_path: Path, config: RawDataConfig) -> IngestionResult:
             quote_char='"',
             infer_schema=True,
         )
+        selected = lazy_frame.select(RAW_COLUMNS)
+        target_filter_counts = (
+            selected.select(
+                pl.len().alias("raw_row_count"),
+                (pl.col("underlying_symbol") == config.target_symbol)
+                .sum()
+                .alias("target_symbol_row_count"),
+            )
+            .collect(engine="streaming")
+            .row(0, named=True)
+        )
+        raw_row_count = int(target_filter_counts["raw_row_count"])
+        target_symbol_row_count = int(target_filter_counts["target_symbol_row_count"])
+        non_target_symbol_row_count = raw_row_count - target_symbol_row_count
         frame = (
-            lazy_frame.select(RAW_COLUMNS)
+            selected
             .filter(pl.col("underlying_symbol") == config.target_symbol)
             .with_columns(
                 pl.col("quote_date").str.strptime(pl.Date, strict=True),
@@ -102,6 +119,9 @@ def ingest_one_zip(zip_path: Path, config: RawDataConfig) -> IngestionResult:
             source_zip=zip_path,
             quote_date=quote_date,
             bronze_path=None,
+            raw_row_count=raw_row_count,
+            target_symbol_row_count=target_symbol_row_count,
+            non_target_symbol_row_count=non_target_symbol_row_count,
             row_count=frame.height,
             status="skipped_out_of_sample_window",
         )
@@ -114,6 +134,9 @@ def ingest_one_zip(zip_path: Path, config: RawDataConfig) -> IngestionResult:
         source_zip=zip_path,
         quote_date=quote_date,
         bronze_path=bronze_path,
+        raw_row_count=raw_row_count,
+        target_symbol_row_count=target_symbol_row_count,
+        non_target_symbol_row_count=non_target_symbol_row_count,
         row_count=frame.height,
         status="written",
     )

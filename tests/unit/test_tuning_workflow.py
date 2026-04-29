@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -13,9 +14,12 @@ import pytest
 
 from ivsurf.config import HpoProfileConfig
 from ivsurf.evaluation.loss_panels import build_daily_loss_frame, mean_daily_loss_metric
+from ivsurf.surfaces.interpolation import COMPLETION_STATUS_OBSERVED
 from ivsurf.training.tuning import (
+    TUNING_RESULT_SCHEMA_VERSION,
     TuningResult,
     load_required_tuning_results,
+    load_tuning_result,
     require_consistent_clean_evaluation_policy,
     require_matching_primary_loss_metric,
     write_tuning_result,
@@ -48,6 +52,7 @@ def test_load_required_tuning_results_reads_profile_specific_manifests(tmp_path:
     neural_path = tmp_path / "tuning" / "hpo_30_trials" / "neural_surface.json"
     write_tuning_result(
         TuningResult(
+            schema_version=TUNING_RESULT_SCHEMA_VERSION,
             model_name="ridge",
             hpo_profile_name="hpo_30_trials",
             training_profile_name="train_30_epochs",
@@ -68,6 +73,7 @@ def test_load_required_tuning_results_reads_profile_specific_manifests(tmp_path:
     )
     write_tuning_result(
         TuningResult(
+            schema_version=TUNING_RESULT_SCHEMA_VERSION,
             model_name="neural_surface",
             hpo_profile_name="hpo_30_trials",
             training_profile_name="train_30_epochs",
@@ -109,10 +115,40 @@ def test_load_required_tuning_results_reads_profile_specific_manifests(tmp_path:
     )
 
 
+def test_load_tuning_result_rejects_missing_schema_version(tmp_path: Path) -> None:
+    stale_path = tmp_path / "ridge.json"
+    stale_path.write_text(
+        json.dumps(
+            {
+                "model_name": "ridge",
+                "hpo_profile_name": "hpo_30_trials",
+                "training_profile_name": "train_30_epochs",
+                "primary_loss_metric": "observed_mse_total_variance",
+                "best_value": 0.1,
+                "best_params": {"alpha": 1.0},
+                "n_trials_requested": 30,
+                "n_trials_completed": 30,
+                "n_trials_pruned": 0,
+                "tuning_splits_count": 3,
+                "max_hpo_validation_date": "2021-01-29",
+                "first_clean_test_split_id": "split_0002",
+                "seed": 7,
+                "sampler": "TPESampler",
+                "pruner": "MedianPruner",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="schema is stale or invalid"):
+        load_tuning_result(stale_path)
+
+
 def test_require_matching_primary_loss_metric_rejects_stale_metric(tmp_path: Path) -> None:
     ridge_path = tmp_path / "tuning" / "hpo_30_trials" / "ridge.json"
     write_tuning_result(
         TuningResult(
+            schema_version=TUNING_RESULT_SCHEMA_VERSION,
             model_name="ridge",
             hpo_profile_name="hpo_30_trials",
             training_profile_name="train_30_epochs",
@@ -211,6 +247,7 @@ def test_stage05_daily_loss_metric_matches_stage07_daily_aggregation() -> None:
             "actual_iv_change": np.zeros(4, dtype=np.float64),
             "predicted_iv_change": np.zeros(4, dtype=np.float64),
             "actual_observed_mask": observed_masks.reshape(-1) > 0.5,
+            "actual_completion_status": [COMPLETION_STATUS_OBSERVED] * 4,
             "observed_weight": (observed_masks * vega_weights).reshape(-1),
             "full_grid_weight": np.ones(4, dtype=np.float64),
         }

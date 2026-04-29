@@ -5,7 +5,11 @@ from datetime import date
 import numpy as np
 import polars as pl
 
-from ivsurf.cleaning.derived_fields import add_derived_fields, build_tau_lookup
+from ivsurf.cleaning.derived_fields import (
+    add_derived_fields,
+    add_effective_decision_timestamp,
+    build_tau_lookup,
+)
 from ivsurf.cleaning.option_filters import apply_option_quality_flags, valid_option_rows
 from ivsurf.config import (
     CleaningConfig,
@@ -19,8 +23,16 @@ from ivsurf.models.base import dataset_to_matrices
 from ivsurf.models.naive import NaiveSurfaceModel
 from ivsurf.splits.walkforward import build_walkforward_splits
 from ivsurf.surfaces.aggregation import aggregate_daily_surface
-from ivsurf.surfaces.grid import SurfaceGrid, assign_grid_indices
-from ivsurf.surfaces.interpolation import complete_surface
+from ivsurf.surfaces.grid import (
+    MATURITY_COORDINATE,
+    MONEYNESS_COORDINATE,
+    SURFACE_GRID_SCHEMA_VERSION,
+    SurfaceGrid,
+    assign_grid_indices,
+)
+from ivsurf.surfaces.interpolation import COMPLETED_SURFACE_SCHEMA_VERSION, complete_surface
+
+SURFACE_CONFIG_HASH = "surface-hash"
 
 
 def _make_daily_option_rows(quote_date: date, spot: float) -> pl.DataFrame:
@@ -67,7 +79,7 @@ def test_end_to_end_smoke_pipeline() -> None:
     cleaning_config = CleaningConfig()
     surface_config = SurfaceGridConfig(
         moneyness_points=(-0.1, 0.0, 0.1),
-        maturity_days=(7, 30),
+        maturity_days=(5, 40),
     )
     grid = SurfaceGrid.from_config(surface_config)
 
@@ -87,9 +99,10 @@ def test_end_to_end_smoke_pipeline() -> None:
         bronze = _make_daily_option_rows(quote_date=quote_date, spot=spot)
         tau_lookup = build_tau_lookup(frame=bronze, calendar_config=calendar_config)
         silver = add_derived_fields(frame=bronze, tau_lookup=tau_lookup)
+        silver = add_effective_decision_timestamp(frame=silver, calendar_config=calendar_config)
         silver = apply_option_quality_flags(frame=silver, config=cleaning_config)
         valid = valid_option_rows(silver)
-        assigned = assign_grid_indices(frame=valid, grid=grid)
+        assigned = assign_grid_indices(frame=valid, grid=grid).filter(pl.col("inside_grid_domain"))
         observed = aggregate_daily_surface(frame=assigned, grid=grid, config=surface_config).sort(
             ["quote_date", "maturity_index", "moneyness_index"]
         )
@@ -110,7 +123,16 @@ def test_end_to_end_smoke_pipeline() -> None:
                 pl.Series(
                     "completed_total_variance",
                     completed.completed_total_variance.reshape(-1),
-                )
+                ),
+                pl.lit(silver["effective_decision_timestamp"][0]).alias(
+                    "effective_decision_timestamp"
+                ),
+                pl.lit(SURFACE_GRID_SCHEMA_VERSION).alias("surface_grid_schema_version"),
+                pl.lit(grid.grid_hash).alias("surface_grid_hash"),
+                pl.lit(MATURITY_COORDINATE).alias("maturity_coordinate"),
+                pl.lit(MONEYNESS_COORDINATE).alias("moneyness_coordinate"),
+                pl.lit(COMPLETED_SURFACE_SCHEMA_VERSION).alias("target_surface_version"),
+                pl.lit(SURFACE_CONFIG_HASH).alias("surface_config_hash"),
             )
         )
 

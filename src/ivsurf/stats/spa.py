@@ -45,10 +45,21 @@ def superior_predictive_ability_test(
     if benchmark_losses.shape[0] != candidate_losses.shape[0]:
         message = "benchmark and candidate losses must align in time."
         raise ValueError(message)
+    if benchmark_losses.size == 0:
+        message = "SPA test requires at least one aligned loss observation."
+        raise ValueError(message)
+    if candidate_losses.shape[1] == 0:
+        message = "SPA test requires at least one candidate model."
+        raise ValueError(message)
     if candidate_losses.shape[1] != len(candidate_models):
         message = "candidate_models length must match candidate_losses columns."
         raise ValueError(message)
+    if not np.isfinite(benchmark_losses).all() or not np.isfinite(candidate_losses).all():
+        message = "SPA test losses must contain only finite values."
+        raise ValueError(message)
 
+    benchmark_losses = benchmark_losses.astype(np.float64)
+    candidate_losses = candidate_losses.astype(np.float64)
     differentials = benchmark_losses[:, None] - candidate_losses
     means = differentials.mean(axis=0)
     scales = differentials.std(axis=0, ddof=1)

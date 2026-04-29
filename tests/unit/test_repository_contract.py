@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import torch
+
 from ivsurf.config import (
     CleaningConfig,
     FeatureConfig,
+    NeuralModelConfig,
     RawDataConfig,
     SurfaceGridConfig,
     load_yaml_config,
+)
+from ivsurf.models.neural_surface import NeuralSurfaceRegressor
+from ivsurf.models.penalties import (
+    calendar_monotonicity_penalty,
+    convexity_penalty,
+    roughness_penalty,
 )
 
 
@@ -46,6 +55,43 @@ def test_required_committed_config_assets_exist_and_parse() -> None:
     assert len(production_surface_config.moneyness_points) == 9
     assert len(production_surface_config.maturity_days) == 9
     assert production_feature_config.lag_windows == (1, 5, 22)
-    assert len(smoke_surface_config.moneyness_points) == 2
-    assert len(smoke_surface_config.maturity_days) == 2
+    assert len(smoke_surface_config.moneyness_points) == 3
+    assert len(smoke_surface_config.maturity_days) == 3
     assert smoke_feature_config.lag_windows == (1, 5, 22)
+
+
+def test_official_smoke_grid_is_valid_for_enabled_neural_penalties() -> None:
+    repo_root = _repo_root()
+    smoke_surface_config = SurfaceGridConfig.model_validate(
+        load_yaml_config(repo_root / "configs" / "official_smoke" / "data" / "surface.yaml")
+    )
+    neural_config = NeuralModelConfig.model_validate(
+        {
+            **load_yaml_config(repo_root / "configs" / "models" / "neural_surface.yaml"),
+            "device": "cpu",
+        }
+    )
+
+    NeuralSurfaceRegressor(
+        config=neural_config,
+        grid_shape=(
+            len(smoke_surface_config.maturity_days),
+            len(smoke_surface_config.moneyness_points),
+        ),
+        moneyness_points=smoke_surface_config.moneyness_points,
+    )
+    grid_shape = (
+        len(smoke_surface_config.maturity_days),
+        len(smoke_surface_config.moneyness_points),
+    )
+    surface = torch.full((1, grid_shape[0] * grid_shape[1]), 0.04, dtype=torch.float32)
+    penalties = (
+        calendar_monotonicity_penalty(surface, grid_shape),
+        convexity_penalty(
+            surface,
+            grid_shape,
+            moneyness_points=smoke_surface_config.moneyness_points,
+        ),
+        roughness_penalty(surface, grid_shape),
+    )
+    assert all(bool(torch.isfinite(value).item()) for value in penalties)

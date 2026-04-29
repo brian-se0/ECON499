@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -7,7 +8,12 @@ import orjson
 import polars as pl
 import typer
 
-from ivsurf.cleaning.derived_fields import add_derived_fields, build_tau_lookup
+from ivsurf.cleaning.derived_fields import (
+    DECISION_TIMESTAMP_COLUMN,
+    add_derived_fields,
+    add_effective_decision_timestamp,
+    build_tau_lookup,
+)
 from ivsurf.cleaning.option_filters import apply_option_quality_flags
 from ivsurf.config import (
     CleaningConfig,
@@ -25,6 +31,11 @@ from ivsurf.reproducibility import write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 
 app = typer.Typer(add_completion=False)
+
+
+def _invalid_reason_counts(frame: pl.DataFrame) -> dict[str, int]:
+    reasons = ["VALID" if reason is None else str(reason) for reason in frame["invalid_reason"]]
+    return {reason: int(count) for reason, count in sorted(Counter(reasons).items())}
 
 
 def _silver_path(bronze_path: Path, raw_config: RawDataConfig) -> Path:
@@ -56,6 +67,7 @@ def main(
         context_hash=build_resume_context_hash(
             config_paths=[raw_config_path, cleaning_config_path],
             input_artifact_paths=bronze_files,
+            extra_tokens={"artifact_schema_version": 3},
         ),
     )
 
@@ -102,6 +114,10 @@ def main(
 
             tau_lookup = build_tau_lookup(frame=frame, calendar_config=calendar_config)
             enriched = add_derived_fields(frame=frame, tau_lookup=tau_lookup)
+            enriched = add_effective_decision_timestamp(
+                frame=enriched,
+                calendar_config=calendar_config,
+            )
             enriched = apply_option_quality_flags(frame=enriched, config=cleaning_config)
             summary_status = "built"
 
@@ -113,6 +129,8 @@ def main(
                 "status": summary_status,
                 "rows": enriched.height,
                 "valid_rows": enriched.filter(pl.col("is_valid_observation")).height,
+                "invalid_reason_counts": _invalid_reason_counts(enriched),
+                DECISION_TIMESTAMP_COLUMN: enriched[DECISION_TIMESTAMP_COLUMN][0],
             }
             resumer.mark_complete(
                 item_id,

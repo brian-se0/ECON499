@@ -60,6 +60,7 @@ def evaluate_model_hedging(
     long_maturity_days: int,
     hedge_maturity_days: int,
     hedge_straddle_moneyness: float,
+    hedge_vega_floor: float = 1.0e-12,
 ) -> HedgingEvaluationRow:
     """Evaluate next-day revaluation and hedged PnL for one model/date."""
 
@@ -89,6 +90,7 @@ def evaluate_model_hedging(
         spot=validated_trade_spot,
         surface=actual_surface_t,
         rate=rate,
+        model_name=model_name,
     )
     predicted_book_t1 = value_book(
         instruments=book_instruments,
@@ -96,6 +98,7 @@ def evaluate_model_hedging(
         spot=validated_target_spot,
         surface=predicted_surface_t1,
         rate=rate,
+        model_name=model_name,
     )
     actual_book_t1 = value_book(
         instruments=book_instruments,
@@ -103,6 +106,7 @@ def evaluate_model_hedging(
         spot=validated_target_spot,
         surface=actual_surface_t1,
         rate=rate,
+        model_name=model_name,
     )
 
     hedge = compute_delta_vega_hedge(
@@ -114,6 +118,8 @@ def evaluate_model_hedging(
         rate=rate,
         hedge_maturity_days=hedge_maturity_days,
         hedge_straddle_moneyness=hedge_straddle_moneyness,
+        hedge_vega_floor=hedge_vega_floor,
+        model_name=model_name,
     )
     hedge_call_t0 = value_instrument(
         instrument=hedge.hedge_instrument_call,
@@ -121,6 +127,7 @@ def evaluate_model_hedging(
         spot=validated_trade_spot,
         surface=actual_surface_t,
         rate=rate,
+        model_name=model_name,
     )
     hedge_put_t0 = value_instrument(
         instrument=hedge.hedge_instrument_put,
@@ -128,6 +135,7 @@ def evaluate_model_hedging(
         spot=validated_trade_spot,
         surface=actual_surface_t,
         rate=rate,
+        model_name=model_name,
     )
     hedge_call_t1 = value_instrument(
         instrument=hedge.hedge_instrument_call,
@@ -135,6 +143,7 @@ def evaluate_model_hedging(
         spot=validated_target_spot,
         surface=actual_surface_t1,
         rate=rate,
+        model_name=model_name,
     )
     hedge_put_t1 = value_instrument(
         instrument=hedge.hedge_instrument_put,
@@ -142,6 +151,7 @@ def evaluate_model_hedging(
         spot=validated_target_spot,
         surface=actual_surface_t1,
         rate=rate,
+        model_name=model_name,
     )
 
     revaluation_error = predicted_book_t1.total_value - actual_book_t1.total_value

@@ -45,12 +45,16 @@ def _business_dates(start: date, count: int) -> list[date]:
 
 def _raw_rows(quote_date: date, spot: float) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    expirations = (quote_date + timedelta(days=7), quote_date + timedelta(days=30))
-    for expiration in expirations:
+    expirations = (
+        quote_date + timedelta(days=7),
+        quote_date + timedelta(days=30),
+        quote_date + timedelta(days=60),
+    )
+    for expiration_index, expiration in enumerate(expirations):
         for option_type in ("C", "P"):
-            for moneyness_point in (-0.1, 0.0):
+            for moneyness_point in (-0.1, 0.0, 0.1):
                 strike = spot * math.exp(moneyness_point)
-                maturity_shift = 0.01 if expiration == expirations[1] else 0.0
+                maturity_shift = 0.005 * expiration_index
                 iv = 0.18 + maturity_shift + (0.01 * abs(moneyness_point))
                 rows.append(
                     {
@@ -142,8 +146,8 @@ def test_synthetic_stage01_to_stage09_pipeline_runs_through_stage09_with_committ
     _write_text(
         tmp_path / "configs" / "data" / "surface.yaml",
         (
-            "moneyness_points: [-0.1, 0.0]\n"
-            "maturity_days: [7, 30]\n"
+            "moneyness_points: [-0.1, 0.0, 0.1]\n"
+            "maturity_days: [7, 30, 60]\n"
             'interpolation_order: ["maturity", "moneyness"]\n'
             "interpolation_cycles: 2\n"
             "total_variance_floor: 1.0e-8\n"

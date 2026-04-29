@@ -8,7 +8,49 @@ import torch
 
 
 def _reshape_surface(predictions: torch.Tensor, grid_shape: tuple[int, int]) -> torch.Tensor:
+    if predictions.ndim != 2:
+        message = f"penalty inputs must be rank-2 [samples, cells], found {predictions.ndim}."
+        raise ValueError(message)
+    if len(grid_shape) != 2:
+        message = f"grid_shape must contain maturity and moneyness sizes, found {grid_shape!r}."
+        raise ValueError(message)
+    if grid_shape[0] <= 0 or grid_shape[1] <= 0:
+        message = f"grid_shape sizes must be strictly positive, found {grid_shape!r}."
+        raise ValueError(message)
+    expected_cells = grid_shape[0] * grid_shape[1]
+    if predictions.shape[1] != expected_cells:
+        message = (
+            "penalty inputs must match grid_shape cell count: "
+            f"{predictions.shape[1]} != {expected_cells}."
+        )
+        raise ValueError(message)
+    if not bool(torch.isfinite(predictions).all().detach().item()):
+        message = "penalty inputs must contain only finite predictions."
+        raise ValueError(message)
     return predictions.view(predictions.shape[0], grid_shape[0], grid_shape[1])
+
+
+def _require_min_axis_length(
+    grid_shape: tuple[int, int],
+    *,
+    maturity_min: int,
+    moneyness_min: int,
+    penalty_name: str,
+) -> None:
+    if grid_shape[0] >= maturity_min and grid_shape[1] >= moneyness_min:
+        return
+    message = (
+        f"{penalty_name} requires grid_shape with at least {maturity_min} maturity "
+        f"points and {moneyness_min} moneyness points; found {grid_shape!r}."
+    )
+    raise ValueError(message)
+
+
+def _require_finite_scalar(value: torch.Tensor, *, penalty_name: str) -> torch.Tensor:
+    if value.ndim == 0 and bool(torch.isfinite(value).detach().item()):
+        return value
+    message = f"{penalty_name} produced a non-finite scalar penalty."
+    raise RuntimeError(message)
 
 
 def _coordinate_tensor(
@@ -75,9 +117,18 @@ def calendar_monotonicity_penalty(
 ) -> torch.Tensor:
     """Penalize decreases across maturity."""
 
+    _require_min_axis_length(
+        grid_shape,
+        maturity_min=2,
+        moneyness_min=1,
+        penalty_name="calendar_monotonicity_penalty",
+    )
     surface = _reshape_surface(predictions, grid_shape)
     diffs = surface[:, 1:, :] - surface[:, :-1, :]
-    return torch.relu(-diffs).mean()
+    return _require_finite_scalar(
+        torch.relu(-diffs).mean(),
+        penalty_name="calendar_monotonicity_penalty",
+    )
 
 
 def convexity_penalty(
@@ -88,8 +139,12 @@ def convexity_penalty(
 ) -> torch.Tensor:
     """Penalize negative strike-space call-price curvature across moneyness."""
 
-    if grid_shape[1] < 3:
-        return predictions.new_zeros(())
+    _require_min_axis_length(
+        grid_shape,
+        maturity_min=1,
+        moneyness_min=3,
+        penalty_name="convexity_penalty",
+    )
     surface = _reshape_surface(predictions, grid_shape)
     log_moneyness = _coordinate_tensor(
         moneyness_points,
@@ -101,13 +156,20 @@ def convexity_penalty(
     strikes = torch.exp(log_moneyness)
     call_prices = _normalized_call_prices(surface, log_moneyness=log_moneyness)
     curvature = _second_derivative_nonuniform(call_prices, strikes)
-    return torch.relu(-curvature).mean()
+    return _require_finite_scalar(torch.relu(-curvature).mean(), penalty_name="convexity_penalty")
 
 
 def roughness_penalty(predictions: torch.Tensor, grid_shape: tuple[int, int]) -> torch.Tensor:
     """Discourage large local curvature in either axis."""
 
+    _require_min_axis_length(
+        grid_shape,
+        maturity_min=3,
+        moneyness_min=3,
+        penalty_name="roughness_penalty",
+    )
     surface = _reshape_surface(predictions, grid_shape)
     maturity_curvature = surface[:, 2:, :] - (2.0 * surface[:, 1:-1, :]) + surface[:, :-2, :]
     moneyness_curvature = surface[:, :, 2:] - (2.0 * surface[:, :, 1:-1]) + surface[:, :, :-2]
-    return maturity_curvature.square().mean() + moneyness_curvature.square().mean()
+    penalty = maturity_curvature.square().mean() + moneyness_curvature.square().mean()
+    return _require_finite_scalar(penalty, penalty_name="roughness_penalty")

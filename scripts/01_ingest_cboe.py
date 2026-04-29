@@ -35,6 +35,7 @@ def main(
         context_hash=build_resume_context_hash(
             config_paths=[raw_config_path],
             input_artifact_paths=zip_paths,
+            extra_tokens={"artifact_schema_version": 2},
         ),
     )
 
@@ -58,6 +59,9 @@ def main(
                 "quote_date": result.quote_date.isoformat(),
                 "status": result.status,
                 "bronze_path": str(result.bronze_path) if result.bronze_path is not None else None,
+                "raw_row_count": result.raw_row_count,
+                "target_symbol_row_count": result.target_symbol_row_count,
+                "non_target_symbol_row_count": result.non_target_symbol_row_count,
                 "row_count": result.row_count,
             }
             resumer.mark_complete(
@@ -79,7 +83,11 @@ def main(
         "files_seen": len(result_rows),
         "files_written": len(written_results),
         "files_skipped_out_of_sample_window": len(skipped_results),
-        "rows_parsed": sum(int(row["row_count"]) for row in result_rows),
+        "rows_parsed": sum(int(row["raw_row_count"]) for row in result_rows),
+        "rows_target_symbol": sum(int(row["target_symbol_row_count"]) for row in result_rows),
+        "rows_filtered_non_target_symbol": sum(
+            int(row["non_target_symbol_row_count"]) for row in result_rows
+        ),
         "rows_written": sum(int(row["row_count"]) for row in written_results),
         "sample_window": {
             "start_date": config.sample_start_date.isoformat(),

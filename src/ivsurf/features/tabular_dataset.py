@@ -9,14 +9,22 @@ import numpy as np
 import polars as pl
 
 from ivsurf.calendar import MarketCalendar
+from ivsurf.cleaning.derived_fields import DECISION_TIMESTAMP_COLUMN
 from ivsurf.config import FeatureConfig, MarketCalendarConfig
+from ivsurf.features.availability import TARGET_DECISION_TIMESTAMP_COLUMN
 from ivsurf.features.lagged_surface import pivot_surface_arrays, summarize_lag_window
 from ivsurf.features.liquidity import build_daily_liquidity_features
 from ivsurf.qc.timing_checks import (
     assert_next_observed_target_date,
     assert_strictly_increasing_unique_dates,
 )
-from ivsurf.surfaces.grid import SurfaceGrid
+from ivsurf.surfaces.grid import (
+    MATURITY_COORDINATE,
+    MONEYNESS_COORDINATE,
+    SURFACE_GRID_SCHEMA_VERSION,
+    SurfaceGrid,
+)
+from ivsurf.surfaces.interpolation import COMPLETED_SURFACE_SCHEMA_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,13 +58,27 @@ def build_target_training_weights(
             "target training weights."
         )
         raise ValueError(message)
+    if not np.isfinite(observed_mask_array).all():
+        message = "observed_mask must be finite when building target training weights."
+        raise ValueError(message)
+    valid_mask = (observed_mask_array == 0.0) | (observed_mask_array == 1.0)
+    if not valid_mask.all():
+        message = (
+            "observed_mask must be binary 0/1 when building target training weights; "
+            f"invalid_count={int((~valid_mask).sum())}."
+        )
+        raise ValueError(message)
     if not np.isfinite(vega_weight_array).all():
         message = "target-day vega_weights must be finite when building training weights."
         raise ValueError(message)
 
-    observed_cells = observed_mask_array > 0.5
-    observed_vega = np.maximum(vega_weight_array, 0.0)
-    invalid_observed_cells = observed_cells & (observed_vega <= 0.0)
+    if (vega_weight_array < 0.0).any():
+        minimum = float(vega_weight_array.min())
+        message = f"target-day vega_weights must be nonnegative; minimum_value={minimum}."
+        raise ValueError(message)
+
+    observed_cells = observed_mask_array.astype(bool, copy=False)
+    invalid_observed_cells = observed_cells & (vega_weight_array <= 0.0)
     if invalid_observed_cells.any():
         message = (
             "Observed target cells must retain strictly positive target-day vega when "
@@ -64,7 +86,7 @@ def build_target_training_weights(
         )
         raise ValueError(message)
 
-    return np.where(observed_cells, observed_vega, 1.0).astype(np.float64, copy=False)
+    return np.where(observed_cells, vega_weight_array, 1.0).astype(np.float64, copy=False)
 
 
 def _count_intervening_trading_sessions(
@@ -148,6 +170,14 @@ def build_daily_feature_dataset(
         row: dict[str, object] = {
             "quote_date": quote_date,
             "target_date": target_date,
+            DECISION_TIMESTAMP_COLUMN: surface_arrays.decision_timestamps[position],
+            TARGET_DECISION_TIMESTAMP_COLUMN: surface_arrays.decision_timestamps[position + 1],
+            "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+            "surface_grid_hash": grid.grid_hash,
+            "surface_config_hash": surface_arrays.surface_config_hashes[position],
+            "maturity_coordinate": MATURITY_COORDINATE,
+            "moneyness_coordinate": MONEYNESS_COORDINATE,
+            "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
             "target_gap_sessions": _count_intervening_trading_sessions(
                 calendar,
                 quote_date=quote_date,

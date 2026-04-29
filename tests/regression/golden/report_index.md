@@ -5,7 +5,7 @@
 - Primary loss metric: `observed_mse_total_variance`
 - Best full-sample loss model: `ridge` (0.000018)
 - Best primary tail-risk model by 95th percentile: `ridge` (0.000021)
-- Best hedging revaluation model: `naive` (0.811883)
+- Best hedging revaluation model: `naive` (0.866269)
 - Simplified Tmax-set included models: neural_surface, ridge
 - Interpolation sensitivity summary: mean RMSE diff 0.004684, max abs diff 0.009312
 - Best model by `observed_mse_total_variance`: `ridge` (0.000018)

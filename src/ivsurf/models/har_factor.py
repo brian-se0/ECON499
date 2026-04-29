@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
@@ -9,6 +11,43 @@ from sklearn.preprocessing import StandardScaler
 from ivsurf.features.factors import SurfacePCAFactors
 from ivsurf.models.base import SurfaceForecastModel
 from ivsurf.models.positive_target import LogPositiveTargetAdapter
+
+HAR_LAG_WINDOWS = (1, 5, 22)
+
+
+def validate_har_feature_layout(
+    feature_columns: Sequence[str],
+    target_columns: Sequence[str],
+    *,
+    target_prefix: str = "target_total_variance_",
+) -> None:
+    """Fail fast unless HAR lag blocks are present in the exact grid order."""
+
+    target_suffixes = tuple(
+        column.removeprefix(target_prefix)
+        for column in target_columns
+        if column.startswith(target_prefix)
+    )
+    if len(target_suffixes) != len(target_columns):
+        message = (
+            "HAR factor benchmark requires target_total_variance columns with the expected "
+            f"prefix {target_prefix!r}."
+        )
+        raise ValueError(message)
+    expected_feature_columns = tuple(
+        f"feature_surface_mean_{lag_window:02d}_{suffix}"
+        for lag_window in HAR_LAG_WINDOWS
+        for suffix in target_suffixes
+    )
+    leading_feature_columns = tuple(feature_columns[: len(expected_feature_columns)])
+    if leading_feature_columns != expected_feature_columns:
+        message = (
+            "HAR factor benchmark requires lag-1, lag-5, and lag-22 surface-mean feature "
+            "blocks to be present first and aligned one-to-one with target surface columns. "
+            f"Expected leading columns {expected_feature_columns!r}, "
+            f"found {leading_feature_columns!r}."
+        )
+        raise ValueError(message)
 
 
 class HarFactorSurfaceModel(SurfaceForecastModel):

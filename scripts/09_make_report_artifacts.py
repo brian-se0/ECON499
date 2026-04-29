@@ -28,6 +28,10 @@ from ivsurf.evaluation.interpolation_sensitivity import (
     summarize_interpolation_sensitivity,
 )
 from ivsurf.evaluation.slice_reports import build_slice_metric_frame
+from ivsurf.hedging.validation import (
+    require_hedging_results_match_forecast_coverage,
+    require_hedging_summary_matches_results,
+)
 from ivsurf.io.atomic import write_text_atomic
 from ivsurf.io.parquet import write_csv_frame, write_parquet_frame
 from ivsurf.io.paths import sorted_artifact_files
@@ -262,13 +266,15 @@ def main(
         task_id = progress.add_task("Stage 09 report artifact generation", total=6)
 
         progress.update(task_id, description="Stage 09 loading saved artifacts")
-        actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
-        forecast_frame = load_forecast_frame(workflow_paths.forecast_dir)
+        actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir, grid)
+        forecast_frame = load_forecast_frame(workflow_paths.forecast_dir, grid)
         panel = pl.read_parquet(panel_path)
         daily_loss_frame = pl.read_parquet(daily_loss_path)
         loss_summary = pl.read_parquet(loss_summary_path)
         hedging_results = pl.read_parquet(hedging_results_path)
         hedging_summary = pl.read_parquet(hedging_summary_path)
+        require_hedging_results_match_forecast_coverage(hedging_results, forecast_frame)
+        require_hedging_summary_matches_results(hedging_summary, hedging_results)
         dm_results = _require_mapping_list(
             orjson.loads(dm_results_path.read_bytes()),
             artifact_name="dm_results.json",

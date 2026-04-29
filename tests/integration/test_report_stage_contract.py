@@ -10,12 +10,25 @@ from typing import cast
 import orjson
 import polars as pl
 
+from ivsurf.cleaning.derived_fields import DECISION_TIMESTAMP_COLUMN
 from ivsurf.config import SurfaceGridConfig, load_yaml_config
 from ivsurf.evaluation.alignment import build_forecast_realization_panel
 from ivsurf.evaluation.loss_panels import build_daily_loss_frame
+from ivsurf.features.availability import TARGET_DECISION_TIMESTAMP_COLUMN
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
-from ivsurf.surfaces.grid import SurfaceGrid
+from ivsurf.surfaces.grid import (
+    MATURITY_COORDINATE,
+    MONEYNESS_COORDINATE,
+    SURFACE_GRID_SCHEMA_VERSION,
+    SurfaceGrid,
+)
+from ivsurf.surfaces.interpolation import (
+    COMPLETED_SURFACE_SCHEMA_VERSION,
+    COMPLETION_STATUS_OBSERVED,
+)
+
+SURFACE_CONFIG_HASH = "surface-hash"
 
 
 def _repo_root() -> Path:
@@ -53,6 +66,7 @@ def _surface_rows(
             rows.append(
                 {
                     "quote_date": quote_date,
+                    DECISION_TIMESTAMP_COLUMN: f"{quote_date.isoformat()}T15:45:00-05:00",
                     "maturity_index": maturity_index,
                     "maturity_days": maturity_days,
                     "moneyness_index": moneyness_index,
@@ -62,6 +76,13 @@ def _surface_rows(
                     "completed_total_variance": total_variance,
                     "completed_iv": float((total_variance / maturity_years) ** 0.5),
                     "observed_mask": True,
+                    "completion_status": COMPLETION_STATUS_OBSERVED,
+                    "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                    "surface_grid_hash": grid.grid_hash,
+                    "maturity_coordinate": MATURITY_COORDINATE,
+                    "moneyness_coordinate": MONEYNESS_COORDINATE,
+                    "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
+                    "surface_config_hash": SURFACE_CONFIG_HASH,
                     "vega_sum": 1.0,
                 }
             )
@@ -94,10 +115,23 @@ def _forecast_rows(
                         "model_name": model_name,
                         "quote_date": quote_date,
                         "target_date": target_date,
+                        "split_id": "split_0000",
+                        DECISION_TIMESTAMP_COLUMN: f"{quote_date.isoformat()}T15:45:00-05:00",
+                        TARGET_DECISION_TIMESTAMP_COLUMN: (
+                            f"{target_date.isoformat()}T15:45:00-05:00"
+                        ),
                         "maturity_index": maturity_index,
                         "maturity_days": maturity_days,
                         "moneyness_index": moneyness_index,
                         "moneyness_point": moneyness_point,
+                        "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                        "surface_grid_hash": grid.grid_hash,
+                        "maturity_coordinate": MATURITY_COORDINATE,
+                        "moneyness_coordinate": MONEYNESS_COORDINATE,
+                        "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
+                        "surface_config_hash": SURFACE_CONFIG_HASH,
+                        "model_config_hash": f"{model_name}-model-hash",
+                        "training_run_id": f"{model_name}-training-run",
                         "predicted_total_variance": float(total_variance),
                     }
                 )
@@ -162,7 +196,11 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
     forecast_frame.write_parquet(forecast_dir / "forecasts.parquet")
 
     silver_rows = [
-        {"quote_date": quote_date_value, "active_underlying_price_1545": spot}
+        {
+            "quote_date": quote_date_value,
+            "active_underlying_price_1545": spot,
+            "is_valid_observation": True,
+        }
         for quote_date_value, spot in zip(
             quote_dates,
             [3700.0, 3712.0, 3724.0, 3738.0],
@@ -369,14 +407,17 @@ def test_report_stage_consumes_real_stage07_contracts(tmp_path: Path) -> None:
                     actual_surface_t=surface_interpolator_from_frame(
                         actual_lookup[group["quote_date"][0]],
                         total_variance_column="completed_total_variance",
+                        grid=grid,
                     ),
                     actual_surface_t1=surface_interpolator_from_frame(
                         actual_lookup[group["target_date"][0]],
                         total_variance_column="completed_total_variance",
+                        grid=grid,
                     ),
                     predicted_surface_t1=surface_interpolator_from_frame(
                         group,
                         total_variance_column="predicted_total_variance",
+                        grid=grid,
                     ),
                     rate=0.0,
                     level_notional=1.0,

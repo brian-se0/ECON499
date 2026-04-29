@@ -14,6 +14,7 @@ from ivsurf.config import (
     HpoProfileConfig,
     RawDataConfig,
     StatsTestConfig,
+    SurfaceGridConfig,
     TrainingProfileConfig,
     load_yaml_config,
 )
@@ -33,6 +34,7 @@ from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_
 from ivsurf.stats.diebold_mariano import diebold_mariano_test
 from ivsurf.stats.mcs import model_confidence_set
 from ivsurf.stats.spa import superior_predictive_ability_test
+from ivsurf.surfaces.grid import SurfaceGrid
 from ivsurf.training.model_factory import TUNABLE_MODEL_NAMES
 from ivsurf.training.tuning import (
     load_required_tuning_results,
@@ -48,14 +50,72 @@ def _daily_loss_matrix(
     loss_frame: pl.DataFrame,
     metric_column: str,
 ) -> tuple[np.ndarray, tuple[str, ...], tuple[object, ...]]:
+    if metric_column not in loss_frame.columns:
+        message = f"Daily loss frame is missing configured metric column {metric_column!r}."
+        raise ValueError(message)
+    duplicate_keys = (
+        loss_frame.group_by(["model_name", "target_date"])
+        .agg(pl.len().alias("row_count"))
+        .filter(pl.col("row_count") > 1)
+    )
+    if not duplicate_keys.is_empty():
+        message = (
+            "Daily loss frame contains duplicate model_name/target_date rows; "
+            f"duplicate key count={duplicate_keys.height}."
+        )
+        raise ValueError(message)
     pivoted = (
         loss_frame.select("model_name", "target_date", metric_column)
         .pivot(on="model_name", index="target_date", values=metric_column)
         .sort("target_date")
     )
     model_columns = tuple(column for column in pivoted.columns if column != "target_date")
+    if not model_columns:
+        message = "Daily loss matrix must contain at least one model column."
+        raise ValueError(message)
+    if any(pivoted[column].null_count() > 0 for column in model_columns):
+        message = (
+            "Daily loss matrix contains missing model/date coverage after pivoting "
+            f"metric {metric_column!r}."
+        )
+        raise ValueError(message)
     matrix = pivoted.select(model_columns).to_numpy().astype(np.float64)
+    if not np.isfinite(matrix).all():
+        message = f"Daily loss matrix for metric {metric_column!r} contains non-finite values."
+        raise ValueError(message)
     return matrix, model_columns, tuple(pivoted["target_date"].to_list())
+
+
+def _require_finite_loss_metrics(
+    daily_loss_frame: pl.DataFrame,
+    *,
+    loss_metrics: tuple[str, ...],
+) -> None:
+    for metric_column in loss_metrics:
+        _daily_loss_matrix(daily_loss_frame, metric_column)
+
+
+def _require_matching_loss_matrix_contract(
+    *,
+    metric_column: str,
+    metric_model_columns: tuple[str, ...],
+    metric_target_dates: tuple[object, ...],
+    reference_model_columns: tuple[str, ...],
+    reference_target_dates: tuple[object, ...],
+) -> None:
+    if metric_model_columns != reference_model_columns:
+        message = (
+            "All loss metrics must produce the same model ordering in the daily loss frame, "
+            f"found {metric_model_columns!r} != {reference_model_columns!r} "
+            f"for {metric_column}."
+        )
+        raise ValueError(message)
+    if metric_target_dates != reference_target_dates:
+        message = (
+            "All loss metrics must produce the same target-date coverage in the daily loss "
+            f"frame for {metric_column}."
+        )
+        raise ValueError(message)
 
 
 def _loss_summary_frame(
@@ -81,6 +141,7 @@ def _loss_summary_frame(
 @app.command()
 def main(
     raw_config_path: Path = Path("configs/data/raw.yaml"),
+    surface_config_path: Path = Path("configs/data/surface.yaml"),
     metrics_config_path: Path = Path("configs/eval/metrics.yaml"),
     stats_config_path: Path = Path("configs/eval/stats_tests.yaml"),
     hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
@@ -91,12 +152,14 @@ def main(
 ) -> None:
     started_at = datetime.now(UTC)
     raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
+    surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
     hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
     training_profile = TrainingProfileConfig.model_validate(
         load_yaml_config(training_profile_config_path)
     )
     metrics_config = EvaluationMetricsConfig.model_validate(load_yaml_config(metrics_config_path))
     stats_config = StatsTestConfig.model_validate(load_yaml_config(stats_config_path))
+    grid = SurfaceGrid.from_config(surface_config)
     workflow_paths = resolve_workflow_run_paths(
         raw_config,
         hpo_profile_name=hpo_profile.profile_name,
@@ -130,6 +193,7 @@ def main(
         context_hash=build_resume_context_hash(
             config_paths=[
                 raw_config_path,
+                surface_config_path,
                 metrics_config_path,
                 stats_config_path,
                 hpo_profile_config_path,
@@ -144,7 +208,7 @@ def main(
             extra_tokens={
                 "run_profile_name": run_profile_name,
                 "workflow_run_label": workflow_paths.run_label,
-                "artifact_schema_version": 2,
+                "artifact_schema_version": 5,
             },
         ),
     )
@@ -168,8 +232,8 @@ def main(
         else:
             resumer.clear_item("forecast_realization_panel", output_paths=[panel_path])
             progress.update(task_id, description="Stage 07 loading realized surfaces and forecasts")
-            actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir)
-            forecast_frame = load_forecast_frame(workflow_paths.forecast_dir)
+            actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir, grid)
+            forecast_frame = load_forecast_frame(workflow_paths.forecast_dir, grid)
             assert_forecast_origins_after_hpo_boundary(
                 forecast_frame,
                 max_hpo_validation_date=clean_evaluation_policy.max_hpo_validation_date,
@@ -204,11 +268,15 @@ def main(
                 metadata={"rows": daily_loss_frame.height},
             )
 
+        _require_finite_loss_metrics(
+            daily_loss_frame,
+            loss_metrics=stats_config.loss_metrics,
+        )
         primary_metric_column = stats_config.loss_metrics[0]
-        model_columns = _daily_loss_matrix(
+        _, model_columns, target_dates = _daily_loss_matrix(
             loss_frame=daily_loss_frame,
             metric_column=primary_metric_column,
-        )[1]
+        )
         benchmark_model = stats_config.benchmark_model
         if benchmark_model not in model_columns:
             message = f"Benchmark model {benchmark_model} not found in loss frame."
@@ -225,17 +293,17 @@ def main(
             resumer.clear_item("dm_results", output_paths=[dm_results_path])
             dm_results: list[dict[str, object]] = []
             for metric_column in stats_config.loss_metrics:
-                loss_matrix, metric_model_columns, _ = _daily_loss_matrix(
+                loss_matrix, metric_model_columns, metric_target_dates = _daily_loss_matrix(
                     loss_frame=daily_loss_frame,
                     metric_column=metric_column,
                 )
-                if metric_model_columns != model_columns:
-                    message = (
-                        "All loss metrics must produce the same model ordering in the daily "
-                        f"loss frame, found {metric_model_columns!r} != {model_columns!r} "
-                        f"for {metric_column}."
-                    )
-                    raise ValueError(message)
+                _require_matching_loss_matrix_contract(
+                    metric_column=metric_column,
+                    metric_model_columns=metric_model_columns,
+                    metric_target_dates=metric_target_dates,
+                    reference_model_columns=model_columns,
+                    reference_target_dates=target_dates,
+                )
                 benchmark_index = metric_model_columns.index(benchmark_model)
                 benchmark_losses = loss_matrix[:, benchmark_index]
                 for model_name in metric_model_columns:
@@ -275,9 +343,16 @@ def main(
             resumer.clear_item("spa_result", output_paths=[spa_result_path])
             spa_results: list[dict[str, object]] = []
             for metric_column in stats_config.loss_metrics:
-                loss_matrix, metric_model_columns, _ = _daily_loss_matrix(
+                loss_matrix, metric_model_columns, metric_target_dates = _daily_loss_matrix(
                     loss_frame=daily_loss_frame,
                     metric_column=metric_column,
+                )
+                _require_matching_loss_matrix_contract(
+                    metric_column=metric_column,
+                    metric_model_columns=metric_model_columns,
+                    metric_target_dates=metric_target_dates,
+                    reference_model_columns=model_columns,
+                    reference_target_dates=target_dates,
                 )
                 candidate_models = tuple(
                     model for model in metric_model_columns if model != benchmark_model
@@ -320,9 +395,16 @@ def main(
             resumer.clear_item("mcs_result", output_paths=[mcs_result_path])
             mcs_results: list[dict[str, object]] = []
             for metric_column in stats_config.loss_metrics:
-                loss_matrix, metric_model_columns, _ = _daily_loss_matrix(
+                loss_matrix, metric_model_columns, metric_target_dates = _daily_loss_matrix(
                     loss_frame=daily_loss_frame,
                     metric_column=metric_column,
+                )
+                _require_matching_loss_matrix_contract(
+                    metric_column=metric_column,
+                    metric_model_columns=metric_model_columns,
+                    metric_target_dates=metric_target_dates,
+                    reference_model_columns=model_columns,
+                    reference_target_dates=target_dates,
                 )
                 mcs_result = asdict(
                     model_confidence_set(
@@ -384,6 +466,7 @@ def main(
         started_at=started_at,
         config_paths=[
             raw_config_path,
+            surface_config_path,
             metrics_config_path,
             stats_config_path,
             hpo_profile_config_path,

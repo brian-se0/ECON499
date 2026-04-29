@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import orjson
 import polars as pl
+import pytest
 
 from ivsurf.config import SurfaceGridConfig
 from ivsurf.evaluation.diagnostics import (
@@ -307,3 +308,23 @@ def test_write_run_manifest_records_required_fields(tmp_path: Path) -> None:
     assert payload["config_snapshots"][0]["content"] == "foo: 1\nbar: true\n"
     assert "package_versions" in payload
     assert "hardware_metadata" in payload
+
+
+def test_write_run_manifest_requires_git_commit_hash(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("foo: 1\n", encoding="utf-8")
+    input_artifact = tmp_path / "input.txt"
+    input_artifact.write_text("input\n", encoding="utf-8")
+    output_artifact = tmp_path / "output.txt"
+    output_artifact.write_text("output\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="git commit hash"):
+        write_run_manifest(
+            manifests_dir=tmp_path / "manifests",
+            repo_root=tmp_path,
+            script_name="unit_test_stage",
+            started_at=datetime(2026, 4, 8, 12, 0, tzinfo=UTC),
+            config_paths=[config_path],
+            input_artifact_paths=[input_artifact],
+            output_artifact_paths=[output_artifact],
+        )

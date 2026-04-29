@@ -8,6 +8,16 @@ from types import ModuleType
 import orjson
 import polars as pl
 
+from ivsurf.surfaces.grid import (
+    MATURITY_COORDINATE,
+    MONEYNESS_COORDINATE,
+    SURFACE_GRID_SCHEMA_VERSION,
+    SurfaceGrid,
+)
+from ivsurf.surfaces.interpolation import COMPLETED_SURFACE_SCHEMA_VERSION
+
+SURFACE_CONFIG_HASH = "surface-hash"
+
 
 def _load_script_module(script_path: Path, module_name: str) -> ModuleType:
     spec = spec_from_file_location(module_name, script_path)
@@ -26,13 +36,26 @@ def _write_yaml(path: Path, payload: str) -> Path:
 def _gold_rows(quote_date: date, total_variance: float) -> list[dict[str, object]]:
     maturity_days = 30
     maturity_years = maturity_days / 365.0
+    grid = SurfaceGrid(maturity_days=(30,), moneyness_points=(0.0,))
+    decision_timestamp = (
+        "2019-11-29T12:45:00-05:00"
+        if quote_date == date(2019, 11, 29)
+        else f"{quote_date.isoformat()}T15:45:00-05:00"
+    )
     return [
         {
             "quote_date": quote_date,
+            "effective_decision_timestamp": decision_timestamp,
             "maturity_index": 0,
             "maturity_days": maturity_days,
             "moneyness_index": 0,
             "moneyness_point": 0.0,
+            "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+            "surface_grid_hash": grid.grid_hash,
+            "maturity_coordinate": MATURITY_COORDINATE,
+            "moneyness_coordinate": MONEYNESS_COORDINATE,
+            "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
+            "surface_config_hash": SURFACE_CONFIG_HASH,
             "observed_total_variance": total_variance,
             "observed_iv": float((total_variance / maturity_years) ** 0.5),
             "completed_total_variance": total_variance,
@@ -141,3 +164,10 @@ def test_stage04_aligns_pre_early_close_features_to_the_early_close_target(tmp_p
     assert aligned_row.height == 1
     assert aligned_row["target_date"].to_list() == [date(2019, 11, 29)]
     assert aligned_row["target_gap_sessions"].to_list() == [0]
+    assert aligned_row["effective_decision_timestamp"].to_list() == [
+        "2019-11-27T15:45:00-05:00"
+    ]
+    assert aligned_row["target_effective_decision_timestamp"].to_list() == [
+        "2019-11-29T12:45:00-05:00"
+    ]
+    assert aligned_row["surface_config_hash"].to_list() == [SURFACE_CONFIG_HASH]

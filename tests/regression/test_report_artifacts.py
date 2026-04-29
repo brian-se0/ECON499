@@ -11,14 +11,22 @@ import numpy as np
 import orjson
 import polars as pl
 
+from ivsurf.cleaning.derived_fields import DECISION_TIMESTAMP_COLUMN
 from ivsurf.evaluation.alignment import build_forecast_realization_panel
 from ivsurf.evaluation.loss_panels import build_daily_loss_frame
+from ivsurf.features.availability import TARGET_DECISION_TIMESTAMP_COLUMN
 from ivsurf.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
 from ivsurf.hedging.revaluation import surface_interpolator_from_frame
-from ivsurf.surfaces.grid import SurfaceGrid
-from ivsurf.surfaces.interpolation import complete_surface
+from ivsurf.surfaces.grid import (
+    MATURITY_COORDINATE,
+    MONEYNESS_COORDINATE,
+    SURFACE_GRID_SCHEMA_VERSION,
+    SurfaceGrid,
+)
+from ivsurf.surfaces.interpolation import COMPLETED_SURFACE_SCHEMA_VERSION, complete_surface
 
 GOLDEN_DIR = Path(__file__).with_name("golden")
+SURFACE_CONFIG_HASH = "surface-hash"
 
 
 def _load_script_module(script_path: Path, module_name: str) -> ModuleType:
@@ -54,7 +62,7 @@ def _surface_rows(
         observed.append(row)
     observed[0][1] = float("nan")
     observed[2][0] = float("nan")
-    completed = complete_surface(
+    completed_surface = complete_surface(
         observed_total_variance=pl.DataFrame(observed).to_numpy(),
         observed_mask=np.isfinite(pl.DataFrame(observed).to_numpy()),
         maturity_coordinates=grid.maturity_years,
@@ -62,7 +70,9 @@ def _surface_rows(
         interpolation_order=("maturity", "moneyness"),
         interpolation_cycles=2,
         total_variance_floor=1.0e-8,
-    ).completed_total_variance
+    )
+    completed = completed_surface.completed_total_variance
+    completion_status = completed_surface.completion_status
 
     rows: list[dict[str, object]] = []
     for maturity_index, maturity_days in enumerate(grid.maturity_days):
@@ -73,6 +83,7 @@ def _surface_rows(
             rows.append(
                 {
                     "quote_date": quote_date,
+                    DECISION_TIMESTAMP_COLUMN: f"{quote_date.isoformat()}T15:45:00-05:00",
                     "maturity_index": maturity_index,
                     "maturity_days": maturity_days,
                     "moneyness_index": moneyness_index,
@@ -86,6 +97,13 @@ def _surface_rows(
                     "completed_total_variance": completed_value,
                     "completed_iv": float((completed_value / maturity_years) ** 0.5),
                     "observed_mask": observed_value == observed_value,
+                    "completion_status": str(completion_status[maturity_index, moneyness_index]),
+                    "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                    "surface_grid_hash": grid.grid_hash,
+                    "maturity_coordinate": MATURITY_COORDINATE,
+                    "moneyness_coordinate": MONEYNESS_COORDINATE,
+                    "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
+                    "surface_config_hash": SURFACE_CONFIG_HASH,
                     "vega_sum": 1.0 if observed_value == observed_value else 0.0,
                 }
             )
@@ -125,10 +143,23 @@ def _forecast_rows(
                         "model_name": model_name,
                         "quote_date": quote_date,
                         "target_date": target_date,
+                        "split_id": "split_0000",
+                        DECISION_TIMESTAMP_COLUMN: f"{quote_date.isoformat()}T15:45:00-05:00",
+                        TARGET_DECISION_TIMESTAMP_COLUMN: (
+                            f"{target_date.isoformat()}T15:45:00-05:00"
+                        ),
                         "maturity_index": maturity_index,
                         "maturity_days": maturity_days,
                         "moneyness_index": moneyness_index,
                         "moneyness_point": moneyness_point,
+                        "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                        "surface_grid_hash": grid.grid_hash,
+                        "maturity_coordinate": MATURITY_COORDINATE,
+                        "moneyness_coordinate": MONEYNESS_COORDINATE,
+                        "target_surface_version": COMPLETED_SURFACE_SCHEMA_VERSION,
+                        "surface_config_hash": SURFACE_CONFIG_HASH,
+                        "model_config_hash": f"{model_name}-model-hash",
+                        "training_run_id": f"{model_name}-training-run",
                         "predicted_total_variance": float(total_variance),
                     }
                 )
@@ -185,7 +216,11 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
     pl.DataFrame(forecast_rows).write_parquet(forecast_dir / "forecasts.parquet")
 
     silver_rows = [
-        {"quote_date": quote_date, "active_underlying_price_1545": spot}
+        {
+            "quote_date": quote_date,
+            "active_underlying_price_1545": spot,
+            "is_valid_observation": True,
+        }
         for quote_date, spot in zip(quote_dates, [100.0, 101.0, 102.0, 103.0], strict=True)
     ]
     pl.DataFrame(silver_rows).write_parquet(silver_dir / "spots.parquet")
@@ -395,23 +430,26 @@ def test_report_artifact_bundle_regression(tmp_path: Path) -> None:
                     actual_surface_t=surface_interpolator_from_frame(
                         actual_lookup[group["quote_date"][0]],
                         total_variance_column="completed_total_variance",
+                        grid=grid,
                     ),
                     actual_surface_t1=surface_interpolator_from_frame(
                         actual_lookup[group["target_date"][0]],
                         total_variance_column="completed_total_variance",
+                        grid=grid,
                     ),
                     predicted_surface_t1=surface_interpolator_from_frame(
                         group,
                         total_variance_column="predicted_total_variance",
+                        grid=grid,
                     ),
                     rate=0.0,
                     level_notional=1.0,
                     skew_notional=1.0,
                     calendar_notional=0.5,
-                    skew_moneyness_abs=0.1,
-                    short_maturity_days=30,
+                    skew_moneyness_abs=0.09,
+                    short_maturity_days=31,
                     long_maturity_days=90,
-                    hedge_maturity_days=30,
+                    hedge_maturity_days=31,
                     hedge_straddle_moneyness=0.0,
                 )
             )

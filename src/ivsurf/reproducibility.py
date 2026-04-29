@@ -230,13 +230,20 @@ def write_run_manifest(
     split_manifest_hash = (
         sha256_file(split_manifest_path.resolve()) if split_manifest_path is not None else None
     )
+    commit_hash = git_commit_hash(repo_root)
+    if commit_hash is None:
+        message = (
+            "Cannot write run manifest without a git commit hash. "
+            f"repo_root={repo_root.resolve()} is not a usable Git checkout."
+        )
+        raise RuntimeError(message)
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "script_name": script_name,
         "started_at_utc": started_at.astimezone(UTC).isoformat(),
         "completed_at_utc": finished_at.isoformat(),
         "duration_seconds": (finished_at - started_at.astimezone(UTC)).total_seconds(),
-        "git_commit_hash": git_commit_hash(repo_root),
+        "git_commit_hash": commit_hash,
         "random_seed": random_seed,
         "config_snapshots": [asdict(snapshot) for snapshot in config_snapshots],
         "package_versions": collect_package_versions(),

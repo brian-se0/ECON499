@@ -64,12 +64,16 @@ def _business_dates(start: date, count: int) -> list[date]:
 
 def _raw_rows(quote_date: date, spot: float) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    expirations = (quote_date + timedelta(days=7), quote_date + timedelta(days=30))
-    for expiration in expirations:
+    expirations = (
+        quote_date + timedelta(days=7),
+        quote_date + timedelta(days=30),
+        quote_date + timedelta(days=60),
+    )
+    for expiration_index, expiration in enumerate(expirations):
         for option_type in ("C", "P"):
-            for moneyness_point in (-0.10, 0.00):
+            for moneyness_point in (-0.10, 0.00, 0.10):
                 strike = spot * math.exp(moneyness_point)
-                maturity_shift = 0.01 if expiration == expirations[1] else 0.0
+                maturity_shift = 0.005 * expiration_index
                 iv = 0.18 + maturity_shift + (0.01 * abs(moneyness_point))
                 rows.append(
                     {
@@ -265,6 +269,7 @@ def run_official_smoke(
     )
     stage07.main(
         raw_config_path=raw_config_path,
+        surface_config_path=smoke_surface_config_path,
         metrics_config_path=metrics_config_path,
         stats_config_path=smoke_stats_config_path,
         hpo_profile_config_path=smoke_hpo_profile_path,
@@ -272,6 +277,7 @@ def run_official_smoke(
     )
     stage08.main(
         raw_config_path=raw_config_path,
+        surface_config_path=smoke_surface_config_path,
         metrics_config_path=metrics_config_path,
         hedging_config_path=smoke_hedging_config_path,
         hpo_profile_config_path=smoke_hpo_profile_path,

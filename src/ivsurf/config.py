@@ -9,6 +9,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
 
+from ivsurf.surfaces.grid_validation import validate_maturity_days, validate_moneyness_points
+
 
 class RawDataConfig(BaseModel):
     """Locations and raw-data scope."""
@@ -82,6 +84,40 @@ class SurfaceGridConfig(BaseModel):
     interpolation_cycles: PositiveInt = 2
     total_variance_floor: float = 1.0e-8
     observed_cell_min_count: PositiveInt = 1
+
+    @field_validator("moneyness_points", mode="before")
+    @classmethod
+    def reject_non_numeric_moneyness_points(cls, values: Any) -> Any:
+        if not isinstance(values, list | tuple):
+            message = "moneyness_points must be a sequence of numeric coordinates."
+            raise ValueError(message)
+        for value in values:
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                message = f"moneyness_points must contain numeric coordinates; got {value!r}."
+                raise ValueError(message)
+        return values
+
+    @field_validator("moneyness_points")
+    @classmethod
+    def validate_moneyness_points(cls, values: tuple[float, ...]) -> tuple[float, ...]:
+        return validate_moneyness_points(values)
+
+    @field_validator("maturity_days", mode="before")
+    @classmethod
+    def reject_non_integer_maturity_days(cls, values: Any) -> Any:
+        if not isinstance(values, list | tuple):
+            message = "maturity_days must be a sequence of integer day counts."
+            raise ValueError(message)
+        for value in values:
+            if isinstance(value, bool) or not isinstance(value, int):
+                message = f"maturity_days must contain integer day counts; got {value!r}."
+                raise ValueError(message)
+        return values
+
+    @field_validator("maturity_days")
+    @classmethod
+    def validate_maturity_days(cls, values: tuple[int, ...]) -> tuple[int, ...]:
+        return validate_maturity_days(values)
 
     @field_validator("interpolation_order")
     @classmethod
@@ -310,6 +346,7 @@ class HedgingConfig(BaseModel):
     long_maturity_days: PositiveInt = 90
     hedge_maturity_days: PositiveInt = 30
     hedge_straddle_moneyness: float = 0.0
+    hedge_vega_floor: float = Field(default=1.0e-12, gt=0.0)
 
 
 class OptunaPrunerConfig(BaseModel):

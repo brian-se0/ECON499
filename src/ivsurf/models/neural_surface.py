@@ -107,6 +107,38 @@ def _validated_total_variance(
     return total_variance_predictions
 
 
+def _require_neural_penalty_grid_domain(
+    *,
+    grid_shape: tuple[int, int],
+    config: NeuralModelConfig,
+) -> None:
+    if config.calendar_penalty_weight > 0.0 and grid_shape[0] < 2:
+        message = (
+            "calendar_penalty_weight is positive, so the neural grid requires at "
+            f"least 2 maturity points; found grid_shape={grid_shape!r}."
+        )
+        raise ValueError(message)
+    if config.convexity_penalty_weight > 0.0 and grid_shape[1] < 3:
+        message = (
+            "convexity_penalty_weight is positive, so the neural grid requires at "
+            f"least 3 moneyness points; found grid_shape={grid_shape!r}."
+        )
+        raise ValueError(message)
+    if config.roughness_penalty_weight > 0.0 and (grid_shape[0] < 3 or grid_shape[1] < 3):
+        message = (
+            "roughness_penalty_weight is positive, so the neural grid requires at "
+            f"least 3 maturity points and 3 moneyness points; found grid_shape={grid_shape!r}."
+        )
+        raise ValueError(message)
+
+
+def _require_finite_scalar_loss(loss: torch.Tensor, *, context: str) -> torch.Tensor:
+    if loss.ndim == 0 and bool(torch.isfinite(loss).detach().item()):
+        return loss
+    message = f"{context} produced a non-finite scalar loss."
+    raise RuntimeError(message)
+
+
 @dataclass(frozen=True, slots=True)
 class NeuralValidationDiagnostics:
     """Validation diagnostics persisted for the selected neural checkpoint."""
@@ -151,6 +183,9 @@ def _validation_score_and_diagnostics(
     vega_weights: np.ndarray,
     grid_shape: tuple[int, int],
     moneyness_points: tuple[float, ...],
+    calendar_penalty_weight: float,
+    convexity_penalty_weight: float,
+    roughness_penalty_weight: float,
     metric_name: str,
     positive_floor: float,
 ) -> NeuralValidationDiagnostics:
@@ -170,6 +205,28 @@ def _validation_score_and_diagnostics(
     prediction_tensor = torch.as_tensor(predictions, dtype=torch.float32, device=device)
     target_mean = float(np.mean(targets))
     prediction_mean = float(np.mean(predictions))
+    calendar_penalty_value = 0.0
+    if calendar_penalty_weight > 0.0:
+        calendar_penalty_value = float(
+            calendar_monotonicity_penalty(prediction_tensor, grid_shape).detach().cpu().item()
+        )
+    convexity_penalty_value = 0.0
+    if convexity_penalty_weight > 0.0:
+        convexity_penalty_value = float(
+            convexity_penalty(
+                prediction_tensor,
+                grid_shape,
+                moneyness_points=moneyness_points,
+            )
+            .detach()
+            .cpu()
+            .item()
+        )
+    roughness_penalty_value = 0.0
+    if roughness_penalty_weight > 0.0:
+        roughness_penalty_value = float(
+            roughness_penalty(prediction_tensor, grid_shape).detach().cpu().item()
+        )
     return NeuralValidationDiagnostics(
         metric_name=metric_name,
         metric_value=metric_value,
@@ -179,22 +236,9 @@ def _validation_score_and_diagnostics(
             prediction_mean / target_mean if target_mean > 0.0 else float("nan")
         ),
         prediction_below_1e_6_share=float(np.mean(predictions < 1.0e-6)),
-        calendar_penalty=float(
-            calendar_monotonicity_penalty(prediction_tensor, grid_shape).detach().cpu().item()
-        ),
-        convexity_penalty=float(
-            convexity_penalty(
-                prediction_tensor,
-                grid_shape,
-                moneyness_points=moneyness_points,
-            )
-            .detach()
-            .cpu()
-            .item()
-        ),
-        roughness_penalty=float(
-            roughness_penalty(prediction_tensor, grid_shape).detach().cpu().item()
-        ),
+        calendar_penalty=calendar_penalty_value,
+        convexity_penalty=convexity_penalty_value,
+        roughness_penalty=roughness_penalty_value,
     )
 
 
@@ -214,6 +258,7 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
     validation_diagnostics: NeuralValidationDiagnostics | None = None
 
     def __post_init__(self) -> None:
+        _require_neural_penalty_grid_domain(grid_shape=self.grid_shape, config=self.config)
         if len(self.moneyness_points) != self.grid_shape[1]:
             message = (
                 "NeuralSurfaceRegressor moneyness_points length must match the "
@@ -364,21 +409,28 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                         observed_loss_weight=self.config.observed_loss_weight,
                         imputed_loss_weight=self.config.imputed_loss_weight,
                     )
-                    loss = loss + (
-                        self.config.calendar_penalty_weight
-                        * calendar_monotonicity_penalty(predictions, self.grid_shape)
-                    )
-                    loss = loss + (
-                        self.config.convexity_penalty_weight
-                        * convexity_penalty(
-                            predictions,
-                            self.grid_shape,
-                            moneyness_points=self.moneyness_points,
+                    if self.config.calendar_penalty_weight > 0.0:
+                        loss = loss + (
+                            self.config.calendar_penalty_weight
+                            * calendar_monotonicity_penalty(predictions, self.grid_shape)
                         )
-                    )
-                    loss = loss + (
-                        self.config.roughness_penalty_weight
-                        * roughness_penalty(predictions, self.grid_shape)
+                    if self.config.convexity_penalty_weight > 0.0:
+                        loss = loss + (
+                            self.config.convexity_penalty_weight
+                            * convexity_penalty(
+                                predictions,
+                                self.grid_shape,
+                                moneyness_points=self.moneyness_points,
+                            )
+                        )
+                    if self.config.roughness_penalty_weight > 0.0:
+                        loss = loss + (
+                            self.config.roughness_penalty_weight
+                            * roughness_penalty(predictions, self.grid_shape)
+                        )
+                    loss = _require_finite_scalar_loss(
+                        loss,
+                        context="NeuralSurfaceRegressor training",
                     )
 
                 if use_cuda:
@@ -422,6 +474,9 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                 vega_weights=validation_vega_weights,
                 grid_shape=self.grid_shape,
                 moneyness_points=self.moneyness_points,
+                calendar_penalty_weight=self.config.calendar_penalty_weight,
+                convexity_penalty_weight=self.config.convexity_penalty_weight,
+                roughness_penalty_weight=self.config.roughness_penalty_weight,
                 metric_name=validation_metric_name,
                 positive_floor=validation_positive_floor,
             )
@@ -466,6 +521,9 @@ class NeuralSurfaceRegressor(SurfaceForecastModel):
                 vega_weights=validation_vega_weights,
                 grid_shape=self.grid_shape,
                 moneyness_points=self.moneyness_points,
+                calendar_penalty_weight=self.config.calendar_penalty_weight,
+                convexity_penalty_weight=self.config.convexity_penalty_weight,
+                roughness_penalty_weight=self.config.roughness_penalty_weight,
                 metric_name=validation_metric_name,
                 positive_floor=validation_positive_floor,
             )

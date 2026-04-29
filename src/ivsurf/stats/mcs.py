@@ -68,8 +68,17 @@ def model_confidence_set(
     if losses.ndim != 2:
         message = "losses must be a two-dimensional array."
         raise ValueError(message)
+    if losses.shape[0] == 0:
+        message = "MCS requires at least one aligned loss observation."
+        raise ValueError(message)
+    if losses.shape[1] == 0:
+        message = "MCS requires at least one model."
+        raise ValueError(message)
     if losses.shape[1] != len(model_names):
         message = "model_names length must match losses columns."
+        raise ValueError(message)
+    if not np.isfinite(losses).all():
+        message = "MCS losses must contain only finite values."
         raise ValueError(message)
 
     remaining_losses = losses.astype(np.float64)

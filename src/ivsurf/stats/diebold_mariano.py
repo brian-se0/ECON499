@@ -59,11 +59,25 @@ def diebold_mariano_test(
     if loss_a.ndim != 1:
         message = "DM test expects one-dimensional loss series."
         raise ValueError(message)
+    if loss_a.size == 0:
+        message = "DM test requires at least one aligned loss observation."
+        raise ValueError(message)
+    if not np.isfinite(loss_a).all() or not np.isfinite(loss_b).all():
+        message = "DM test loss series must contain only finite values."
+        raise ValueError(message)
+    if max_lag < 0:
+        message = "DM test max_lag must be non-negative."
+        raise ValueError(message)
+    if max_lag >= loss_a.size:
+        message = f"DM test max_lag must be smaller than n_obs ({max_lag} >= {loss_a.size})."
+        raise ValueError(message)
     if alternative not in {"two-sided", "greater", "less"}:
         message = f"Unsupported DM alternative: {alternative}"
         raise ValueError(message)
 
-    differential = loss_a.astype(np.float64) - loss_b.astype(np.float64)
+    loss_a_float = loss_a.astype(np.float64)
+    loss_b_float = loss_b.astype(np.float64)
+    differential = loss_a_float - loss_b_float
     mean_diff = float(differential.mean())
     lrv = long_run_variance(differential, max_lag=max_lag)
     n_obs = differential.shape[0]
@@ -88,12 +102,11 @@ def diebold_mariano_test(
         model_a=model_a,
         model_b=model_b,
         n_obs=n_obs,
-        mean_loss_a=float(loss_a.mean()),
-        mean_loss_b=float(loss_b.mean()),
+        mean_loss_a=float(loss_a_float.mean()),
+        mean_loss_b=float(loss_b_float.mean()),
         mean_differential=mean_diff,
         statistic=float(statistic),
         p_value=float(np.clip(p_value, 0.0, 1.0)),
         alternative=alternative,
         max_lag=max_lag,
     )
-

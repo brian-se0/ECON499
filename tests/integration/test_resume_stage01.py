@@ -74,6 +74,9 @@ def test_stage01_resume_reruns_only_missing_output_item(
             source_zip=zip_path,
             quote_date=quote_date,
             bronze_path=bronze_path,
+            raw_row_count=12,
+            target_symbol_row_count=10,
+            non_target_symbol_row_count=2,
             row_count=10,
             status="written",
         )
@@ -96,6 +99,9 @@ def test_stage01_resume_reruns_only_missing_output_item(
         (tmp_path / "data" / "manifests" / "bronze_ingestion_summary.json").read_bytes()
     )
     assert manifest_payload["files_written"] == 2
+    assert manifest_payload["rows_parsed"] == 24
+    assert manifest_payload["rows_target_symbol"] == 20
+    assert manifest_payload["rows_filtered_non_target_symbol"] == 4
     assert len(manifest_payload["results"]) == 2
     run_manifest_path = sorted(
         (tmp_path / "data" / "manifests" / "runs" / "01_ingest_cboe").glob("*.json")

@@ -4,6 +4,7 @@ from datetime import date
 
 import numpy as np
 import polars as pl
+import pytest
 
 from ivsurf.config import StressWindowConfig
 from ivsurf.evaluation.slice_reports import build_slice_metric_frame
@@ -90,3 +91,52 @@ def test_build_slice_metric_frame_produces_expected_slices() -> None:
     )
     assert observed_stress["cell_count"][0] == 7
     assert observed_stress["target_day_count"][0] == 2
+
+
+def test_observed_slice_metrics_remain_nan_when_slice_has_no_observed_cells() -> None:
+    panel = pl.DataFrame(_panel_rows("good", 1.0)).with_columns(
+        pl.when(pl.col("maturity_days") == 90)
+        .then(False)
+        .otherwise(pl.col("actual_observed_mask"))
+        .alias("actual_observed_mask"),
+        pl.when(pl.col("maturity_days") == 90)
+        .then(0.0)
+        .otherwise(pl.col("observed_weight"))
+        .alias("observed_weight"),
+    )
+    frame = build_slice_metric_frame(
+        panel=panel,
+        positive_floor=1.0e-8,
+        stress_windows=(),
+    )
+
+    observed_empty = frame.filter(
+        (pl.col("slice_family") == "maturity")
+        & (pl.col("slice_label") == "90d")
+        & (pl.col("evaluation_scope") == "observed")
+    )
+    full_slice = frame.filter(
+        (pl.col("slice_family") == "maturity")
+        & (pl.col("slice_label") == "90d")
+        & (pl.col("evaluation_scope") == "full")
+    )
+
+    assert observed_empty["cell_count"].to_list() == [0]
+    assert np.isnan(observed_empty["mse_total_variance"].to_numpy()).all()
+    assert np.isfinite(full_slice["mse_total_variance"].to_numpy()).all()
+
+
+def test_observed_slice_metrics_reject_negative_observed_weights() -> None:
+    panel = pl.DataFrame(_panel_rows("good", 1.0)).with_columns(
+        pl.when(pl.col("actual_observed_mask"))
+        .then(-1.0)
+        .otherwise(pl.col("observed_weight"))
+        .alias("observed_weight")
+    )
+
+    with pytest.raises(ValueError, match="observed weight must be nonnegative"):
+        build_slice_metric_frame(
+            panel=panel,
+            positive_floor=1.0e-8,
+            stress_windows=(),
+        )

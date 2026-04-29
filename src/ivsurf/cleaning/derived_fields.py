@@ -9,6 +9,30 @@ import polars as pl
 from ivsurf.calendar import MarketCalendar
 from ivsurf.config import MarketCalendarConfig
 
+DECISION_TIMESTAMP_COLUMN = "effective_decision_timestamp"
+
+
+def _market_calendar(config: MarketCalendarConfig) -> MarketCalendar:
+    return MarketCalendar(
+        calendar_name=config.calendar_name,
+        timezone=config.timezone,
+        decision_time=config.decision_time,
+        decision_snapshot_minutes_before_close=config.decision_snapshot_minutes_before_close,
+        am_settled_roots=config.am_settled_roots,
+    )
+
+
+def _single_quote_date(frame: pl.DataFrame) -> date:
+    quote_dates = frame.select(pl.col("quote_date").unique()).to_series().to_list()
+    if len(quote_dates) != 1:
+        message = "Derived-field construction expects a single quote_date per frame."
+        raise ValueError(message)
+    quote_date = quote_dates[0]
+    if not isinstance(quote_date, date):
+        message = "quote_date must be parsed as a Polars Date before derived-field construction."
+        raise TypeError(message)
+    return quote_date
+
 
 def build_tau_lookup(
     frame: pl.DataFrame,
@@ -16,22 +40,8 @@ def build_tau_lookup(
 ) -> pl.DataFrame:
     """Build a per-root and per-expiration tau lookup for one quote date."""
 
-    quote_dates = frame.select(pl.col("quote_date").unique()).to_series().to_list()
-    if len(quote_dates) != 1:
-        message = "build_tau_lookup expects a single quote_date per frame."
-        raise ValueError(message)
-    quote_date = quote_dates[0]
-    if not isinstance(quote_date, date):
-        message = "quote_date must be parsed as a Polars Date before tau construction."
-        raise TypeError(message)
-
-    market_calendar = MarketCalendar(
-        calendar_name=calendar_config.calendar_name,
-        timezone=calendar_config.timezone,
-        decision_time=calendar_config.decision_time,
-        decision_snapshot_minutes_before_close=calendar_config.decision_snapshot_minutes_before_close,
-        am_settled_roots=calendar_config.am_settled_roots,
-    )
+    quote_date = _single_quote_date(frame)
+    market_calendar = _market_calendar(calendar_config)
 
     keys = frame.select("root", "expiration").unique().sort(["root", "expiration"])
     rows: list[dict[str, object]] = []
@@ -51,6 +61,18 @@ def build_tau_lookup(
         rows,
         schema={"root": pl.String, "expiration": pl.Date, "tau_years": pl.Float64},
     )
+
+
+def add_effective_decision_timestamp(
+    frame: pl.DataFrame,
+    calendar_config: MarketCalendarConfig,
+) -> pl.DataFrame:
+    """Persist the effective vendor decision timestamp for one daily option artifact."""
+
+    quote_date = _single_quote_date(frame)
+    market_calendar = _market_calendar(calendar_config)
+    decision_timestamp = market_calendar.effective_decision_datetime(quote_date).isoformat()
+    return frame.with_columns(pl.lit(decision_timestamp).alias(DECISION_TIMESTAMP_COLUMN))
 
 
 def add_derived_fields(frame: pl.DataFrame, tau_lookup: pl.DataFrame) -> pl.DataFrame:

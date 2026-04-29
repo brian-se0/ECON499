@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
 import optuna
@@ -25,21 +26,102 @@ TUNABLE_MODEL_NAMES: tuple[str, ...] = (
     "neural_surface",
 )
 
+NEURAL_MODEL_PARAM_KEYS: set[str] = set(NeuralModelConfig.model_fields) - {"model_name"}
+
 
 def _float_param(params: Mapping[str, object], key: str) -> float:
-    value = params[key]
-    if not isinstance(value, int | float | str):
-        message = f"Expected {key} to be numeric-like, found {type(value).__name__}."
+    value = _required_param(params, key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        message = f"Expected {key} to be a real numeric value, found {type(value).__name__}."
         raise TypeError(message)
-    return float(value)
+    normalized = float(value)
+    if not isfinite(normalized):
+        message = f"Expected {key} to be finite, found {value!r}."
+        raise ValueError(message)
+    return normalized
 
 
 def _int_param(params: Mapping[str, object], key: str) -> int:
-    value = params[key]
-    if not isinstance(value, int | float | str):
-        message = f"Expected {key} to be integer-like, found {type(value).__name__}."
+    value = _required_param(params, key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        message = f"Expected {key} to be an integer, found {type(value).__name__}."
         raise TypeError(message)
-    return int(value)
+    return value
+
+
+def _str_param(params: Mapping[str, object], key: str) -> str:
+    value = _required_param(params, key)
+    if not isinstance(value, str) or not value:
+        message = f"Expected {key} to be a non-empty string, found {type(value).__name__}."
+        raise TypeError(message)
+    return value
+
+
+def _required_param(params: Mapping[str, object], key: str) -> object:
+    if key not in params:
+        message = f"Missing required model parameter {key!r}."
+        raise KeyError(message)
+    return params[key]
+
+
+def _reject_extra_params(
+    params: Mapping[str, object],
+    *,
+    allowed_keys: set[str],
+    model_name: str,
+) -> None:
+    extra_keys = sorted(set(params) - allowed_keys)
+    if extra_keys:
+        message = f"Unexpected {model_name} parameters: {extra_keys!r}."
+        raise ValueError(message)
+
+
+def _lightgbm_params(params: Mapping[str, object]) -> dict[str, object]:
+    allowed_keys = {
+        "n_factors",
+        "device_type",
+        "n_estimators",
+        "learning_rate",
+        "num_leaves",
+        "max_depth",
+        "min_child_samples",
+        "feature_fraction",
+        "lambda_l2",
+        "objective",
+        "metric",
+        "verbosity",
+        "n_jobs",
+        "random_state",
+    }
+    _reject_extra_params(params, allowed_keys=allowed_keys, model_name="lightgbm")
+    return {
+        "n_factors": _int_param(params, "n_factors"),
+        "device_type": _str_param(params, "device_type"),
+        "n_estimators": _int_param(params, "n_estimators"),
+        "learning_rate": _float_param(params, "learning_rate"),
+        "num_leaves": _int_param(params, "num_leaves"),
+        "max_depth": _int_param(params, "max_depth"),
+        "min_child_samples": _int_param(params, "min_child_samples"),
+        "feature_fraction": _float_param(params, "feature_fraction"),
+        "lambda_l2": _float_param(params, "lambda_l2"),
+        "objective": _str_param(params, "objective"),
+        "metric": _str_param(params, "metric"),
+        "verbosity": _int_param(params, "verbosity"),
+        "n_jobs": _int_param(params, "n_jobs"),
+        "random_state": _int_param(params, "random_state"),
+    }
+
+
+def _random_forest_params(params: Mapping[str, object]) -> dict[str, object]:
+    allowed_keys = {"n_estimators", "max_depth", "min_samples_leaf", "random_state", "n_jobs"}
+    _reject_extra_params(params, allowed_keys=allowed_keys, model_name="random_forest")
+    return {
+        "n_estimators": _int_param(params, "n_estimators"),
+        "max_depth": _int_param(params, "max_depth"),
+        "min_samples_leaf": _int_param(params, "min_samples_leaf"),
+        "random_state": _int_param(params, "random_state"),
+        "n_jobs": _int_param(params, "n_jobs"),
+    }
 
 
 def suggest_model_from_trial(
@@ -70,9 +152,10 @@ def suggest_model_from_trial(
             target_dim=target_dim,
         )
     if model_name == "lightgbm":
-        params = {
-            key: value for key, value in (base_lightgbm_params or {}).items() if key != "model_name"
-        }
+        if base_lightgbm_params is None:
+            message = "LightGBM tuning requires explicit base_lightgbm_params."
+            raise ValueError(message)
+        params = {key: value for key, value in base_lightgbm_params.items() if key != "model_name"}
         params.update(
             {
                 "n_estimators": trial.suggest_int("n_estimators", 100, 500, step=100),
@@ -85,12 +168,7 @@ def suggest_model_from_trial(
                 "n_factors": trial.suggest_int("n_factors", 2, min(12, target_dim)),
             }
         )
-        params.setdefault("device_type", "gpu")
-        params.setdefault("random_state", 7)
-        params.setdefault("objective", "regression")
-        params.setdefault("metric", "l2")
-        params.setdefault("verbosity", -1)
-        return LightGBMSurfaceModel(**params)
+        return LightGBMSurfaceModel(**_lightgbm_params(params))
     if model_name == "random_forest":
         return RandomForestSurfaceModel(
             n_estimators=trial.suggest_int("n_estimators", 100, 500, step=100),
@@ -140,10 +218,17 @@ def make_model_from_params(
     """Construct a model from persisted tuned parameters."""
 
     if model_name == "naive":
+        _reject_extra_params(params, allowed_keys=set(), model_name="naive")
         return NaiveSurfaceModel()
     if model_name == "ridge":
+        _reject_extra_params(params, allowed_keys={"alpha"}, model_name="ridge")
         return RidgeSurfaceModel(alpha=_float_param(params, "alpha"))
     if model_name == "elasticnet":
+        _reject_extra_params(
+            params,
+            allowed_keys={"alpha", "l1_ratio", "max_iter", "tol"},
+            model_name="elasticnet",
+        )
         return ElasticNetSurfaceModel(
             alpha=_float_param(params, "alpha"),
             l1_ratio=_float_param(params, "l1_ratio"),
@@ -151,17 +236,29 @@ def make_model_from_params(
             tol=_float_param(params, "tol"),
         )
     if model_name == "har_factor":
+        _reject_extra_params(params, allowed_keys={"n_factors", "alpha"}, model_name="har_factor")
         return HarFactorSurfaceModel(
             n_factors=_int_param(params, "n_factors"),
             alpha=_float_param(params, "alpha"),
             target_dim=target_dim,
         )
     if model_name == "lightgbm":
-        return LightGBMSurfaceModel(**dict(params))
+        return LightGBMSurfaceModel(**_lightgbm_params(params))
     if model_name == "random_forest":
-        return RandomForestSurfaceModel(**dict(params))
+        return RandomForestSurfaceModel(**_random_forest_params(params))
     if model_name == "neural_surface":
-        config = base_neural_config.model_copy(update=dict(params))
+        _reject_extra_params(
+            params,
+            allowed_keys=NEURAL_MODEL_PARAM_KEYS,
+            model_name="neural_surface",
+        )
+        config = NeuralModelConfig.model_validate(
+            {
+                **base_neural_config.model_dump(mode="python"),
+                **dict(params),
+            },
+            strict=True,
+        )
         return NeuralSurfaceRegressor(
             config=config,
             grid_shape=grid_shape,

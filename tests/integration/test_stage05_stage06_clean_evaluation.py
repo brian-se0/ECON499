@@ -13,8 +13,16 @@ from pytest import MonkeyPatch
 
 from ivsurf.calendar import MarketCalendar
 from ivsurf.config import WalkforwardConfig
-from ivsurf.splits.manifests import serialize_splits
+from ivsurf.reproducibility import sha256_file
+from ivsurf.splits.manifests import WalkforwardSplit, serialize_splits
 from ivsurf.splits.walkforward import build_walkforward_splits, clean_evaluation_splits
+from ivsurf.surfaces.grid import (
+    MATURITY_COORDINATE,
+    MONEYNESS_COORDINATE,
+    SURFACE_GRID_SCHEMA_VERSION,
+    SurfaceGrid,
+)
+from ivsurf.surfaces.interpolation import COMPLETED_SURFACE_SCHEMA_VERSION
 from ivsurf.training.tuning import load_tuning_result
 
 
@@ -40,6 +48,7 @@ def _calendar_dates(count: int) -> list[date]:
 
 def _feature_frame(row_count: int) -> pl.DataFrame:
     dates = _calendar_dates(row_count + 1)
+    grid = SurfaceGrid(maturity_days=(30,), moneyness_points=(0.0, 0.1))
     rows = []
     for index in range(row_count):
         level = 0.0100 + (0.0001 * index)
@@ -47,6 +56,14 @@ def _feature_frame(row_count: int) -> pl.DataFrame:
             {
                 "quote_date": dates[index],
                 "target_date": dates[index + 1],
+                "effective_decision_timestamp": f"{dates[index].isoformat()}T15:45:00-05:00",
+                "target_effective_decision_timestamp": (
+                    f"{dates[index + 1].isoformat()}T15:45:00-05:00"
+                ),
+                "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                "surface_grid_hash": grid.grid_hash,
+                "maturity_coordinate": MATURITY_COORDINATE,
+                "moneyness_coordinate": MONEYNESS_COORDINATE,
                 "feature_surface_mean_01_0000": level,
                 "feature_surface_mean_01_0001": level + 0.0010,
                 "target_total_variance_0000": level + 0.0002,
@@ -60,6 +77,36 @@ def _feature_frame(row_count: int) -> pl.DataFrame:
             }
         )
     return pl.DataFrame(rows)
+
+
+def _with_surface_metadata(feature_frame: pl.DataFrame, surface_config_path: Path) -> pl.DataFrame:
+    return feature_frame.with_columns(
+        pl.lit(sha256_file(surface_config_path)).alias("surface_config_hash"),
+        pl.lit(COMPLETED_SURFACE_SCHEMA_VERSION).alias("target_surface_version"),
+    )
+
+
+def _serialize_test_splits(
+    *,
+    splits: list[WalkforwardSplit],
+    split_manifest_path: Path,
+    walkforward_config: WalkforwardConfig,
+    feature_frame: pl.DataFrame,
+    feature_path: Path,
+    sample_start_date: str,
+    sample_end_date: str,
+) -> str:
+    return serialize_splits(
+        splits,
+        split_manifest_path,
+        walkforward_config=walkforward_config.model_dump(mode="json"),
+        sample_window={
+            "sample_start_date": sample_start_date,
+            "sample_end_date": sample_end_date,
+        },
+        date_universe=feature_frame["quote_date"].to_list(),
+        feature_dataset_hash=sha256_file(feature_path),
+    )
 
 
 def _observed_quote_dates(count: int, *, skipped_session_indices: set[int]) -> list[date]:
@@ -76,6 +123,7 @@ def _observed_quote_dates(count: int, *, skipped_session_indices: set[int]) -> l
 
 
 def _feature_frame_from_observed_dates(observed_dates: list[date]) -> pl.DataFrame:
+    grid = SurfaceGrid(maturity_days=(30,), moneyness_points=(0.0, 0.1))
     rows = []
     for index, (quote_date, target_date) in enumerate(pairwise(observed_dates)):
         level = 0.0100 + (0.0001 * index)
@@ -83,6 +131,14 @@ def _feature_frame_from_observed_dates(observed_dates: list[date]) -> pl.DataFra
             {
                 "quote_date": quote_date,
                 "target_date": target_date,
+                "effective_decision_timestamp": f"{quote_date.isoformat()}T15:45:00-05:00",
+                "target_effective_decision_timestamp": (
+                    f"{target_date.isoformat()}T15:45:00-05:00"
+                ),
+                "surface_grid_schema_version": SURFACE_GRID_SCHEMA_VERSION,
+                "surface_grid_hash": grid.grid_hash,
+                "maturity_coordinate": MATURITY_COORDINATE,
+                "moneyness_coordinate": MONEYNESS_COORDINATE,
                 "target_gap_sessions": 0,
                 "feature_surface_mean_01_0000": level,
                 "feature_surface_mean_01_0001": level + 0.0010,
@@ -109,7 +165,6 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
     feature_frame = _feature_frame(row_count=714)
     gold_dir.mkdir(parents=True)
     manifests_dir.mkdir(parents=True)
-    feature_frame.write_parquet(gold_dir / "daily_features.parquet")
 
     walkforward_config = WalkforwardConfig(
         train_size=504,
@@ -123,7 +178,6 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
         config=walkforward_config,
     )
     split_manifest_path = manifests_dir / "walkforward_splits.json"
-    serialize_splits(splits, split_manifest_path)
     boundary, clean_splits = clean_evaluation_splits(splits, tuning_splits_count=3)
     expected_clean_quote_dates = {
         date.fromisoformat(day)
@@ -153,6 +207,18 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
             "total_variance_floor: 1.0e-8\n"
             "observed_cell_min_count: 1\n"
         ),
+    )
+    feature_frame = _with_surface_metadata(feature_frame, surface_config_path)
+    feature_path = gold_dir / "daily_features.parquet"
+    feature_frame.write_parquet(feature_path)
+    _serialize_test_splits(
+        splits=splits,
+        split_manifest_path=split_manifest_path,
+        walkforward_config=walkforward_config,
+        feature_frame=feature_frame,
+        feature_path=feature_path,
+        sample_start_date="2021-01-01",
+        sample_end_date="2023-12-31",
     )
     metrics_config_path = _write_text(
         tmp_path / "configs" / "eval" / "metrics.yaml",
@@ -239,6 +305,82 @@ def test_stage05_and_stage06_emit_only_clean_evaluation_forecasts(
             min(forecast_frame["quote_date"].to_list()) > boundary.max_hpo_validation_date
         )
 
+    stage06.main(
+        raw_config_path=raw_config_path,
+        surface_config_path=surface_config_path,
+        metrics_config_path=metrics_config_path,
+        ridge_config_path=repo_root / "configs" / "models" / "ridge.yaml",
+        elasticnet_config_path=repo_root / "configs" / "models" / "elasticnet.yaml",
+        har_config_path=repo_root / "configs" / "models" / "har_factor.yaml",
+        lightgbm_config_path=repo_root / "configs" / "models" / "lightgbm.yaml",
+        random_forest_config_path=repo_root / "configs" / "models" / "random_forest.yaml",
+        neural_config_path=repo_root / "configs" / "models" / "neural_surface.yaml",
+        hpo_profile_config_path=hpo_profile_config_path,
+        training_profile_config_path=training_profile_config_path,
+    )
+    latest_stage06_manifest = sorted(
+        (manifests_dir / "runs" / "06_run_walkforward").glob("*_06_run_walkforward.json")
+    )[-1]
+    latest_payload = orjson.loads(latest_stage06_manifest.read_bytes())
+    model_run_metadata = latest_payload["extra_metadata"]["model_run_metadata"]
+    assert set(model_run_metadata) == {"naive", "ridge"}
+    for model_name in ("naive", "ridge"):
+        model_metadata = model_run_metadata[model_name]
+        assert model_metadata["forecast_artifact_hash"] == sha256_file(
+            forecast_dir / f"{model_name}.parquet"
+        )
+        assert model_metadata["n_forecast_rows"] == len(expected_clean_quote_dates)
+
+    run_manifest_dir = manifests_dir / "runs" / "06_run_walkforward"
+    run_manifest_count = len(list(run_manifest_dir.glob("*_06_run_walkforward.json")))
+    resume_state_path = manifests_dir / "resume" / "06_run_walkforward" / "state.json"
+    original_resume_payload = orjson.loads(resume_state_path.read_bytes())
+    empty_metadata_payload = orjson.loads(orjson.dumps(original_resume_payload))
+    empty_metadata_payload["items"]["ridge"]["metadata"] = {}
+    resume_state_path.write_bytes(
+        orjson.dumps(empty_metadata_payload, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
+    )
+
+    with pytest.raises(ValueError, match="model_name"):
+        stage06.main(
+            raw_config_path=raw_config_path,
+            surface_config_path=surface_config_path,
+            metrics_config_path=metrics_config_path,
+            ridge_config_path=repo_root / "configs" / "models" / "ridge.yaml",
+            elasticnet_config_path=repo_root / "configs" / "models" / "elasticnet.yaml",
+            har_config_path=repo_root / "configs" / "models" / "har_factor.yaml",
+            lightgbm_config_path=repo_root / "configs" / "models" / "lightgbm.yaml",
+            random_forest_config_path=repo_root / "configs" / "models" / "random_forest.yaml",
+            neural_config_path=repo_root / "configs" / "models" / "neural_surface.yaml",
+            hpo_profile_config_path=hpo_profile_config_path,
+            training_profile_config_path=training_profile_config_path,
+        )
+    assert len(list(run_manifest_dir.glob("*_06_run_walkforward.json"))) == run_manifest_count
+
+    resume_state_path.write_bytes(
+        orjson.dumps(original_resume_payload, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
+    )
+    tampered_ridge_forecast = ridge_forecast.with_columns(
+        (pl.col("predicted_total_variance") + 1.0e-6).alias("predicted_total_variance")
+    )
+    tampered_ridge_forecast.write_parquet(forecast_dir / "ridge.parquet")
+
+    with pytest.raises(ValueError, match="forecast_artifact_hash"):
+        stage06.main(
+            raw_config_path=raw_config_path,
+            surface_config_path=surface_config_path,
+            metrics_config_path=metrics_config_path,
+            ridge_config_path=repo_root / "configs" / "models" / "ridge.yaml",
+            elasticnet_config_path=repo_root / "configs" / "models" / "elasticnet.yaml",
+            har_config_path=repo_root / "configs" / "models" / "har_factor.yaml",
+            lightgbm_config_path=repo_root / "configs" / "models" / "lightgbm.yaml",
+            random_forest_config_path=repo_root / "configs" / "models" / "random_forest.yaml",
+            neural_config_path=repo_root / "configs" / "models" / "neural_surface.yaml",
+            hpo_profile_config_path=hpo_profile_config_path,
+            training_profile_config_path=training_profile_config_path,
+        )
+    assert len(list(run_manifest_dir.glob("*_06_run_walkforward.json"))) == run_manifest_count
+
 
 def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
     tmp_path: Path,
@@ -251,7 +393,6 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
     feature_frame = _feature_frame_from_observed_dates(observed_dates)
     gold_dir.mkdir(parents=True)
     manifests_dir.mkdir(parents=True)
-    feature_frame.write_parquet(gold_dir / "daily_features.parquet")
 
     walkforward_config = WalkforwardConfig(
         train_size=6,
@@ -265,7 +406,6 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
         config=walkforward_config,
     )
     split_manifest_path = manifests_dir / "walkforward_splits.json"
-    serialize_splits(splits, split_manifest_path)
     boundary, clean_splits = clean_evaluation_splits(splits, tuning_splits_count=2)
     expected_clean_quote_dates = {
         date.fromisoformat(day)
@@ -300,6 +440,18 @@ def test_stage05_and_stage06_preserve_target_dates_when_feature_rows_have_gaps(
             "total_variance_floor: 1.0e-8\n"
             "observed_cell_min_count: 1\n"
         ),
+    )
+    feature_frame = _with_surface_metadata(feature_frame, surface_config_path)
+    feature_path = gold_dir / "daily_features.parquet"
+    feature_frame.write_parquet(feature_path)
+    _serialize_test_splits(
+        splits=splits,
+        split_manifest_path=split_manifest_path,
+        walkforward_config=walkforward_config,
+        feature_frame=feature_frame,
+        feature_path=feature_path,
+        sample_start_date="2021-01-04",
+        sample_end_date="2021-03-31",
     )
     metrics_config_path = _write_text(
         tmp_path / "configs" / "eval" / "metrics.yaml",
@@ -401,7 +553,6 @@ def test_stage06_rejects_stale_tuning_manifests_with_different_primary_loss_metr
     feature_frame = _feature_frame(row_count=714)
     gold_dir.mkdir(parents=True)
     manifests_dir.mkdir(parents=True)
-    feature_frame.write_parquet(gold_dir / "daily_features.parquet")
 
     walkforward_config = WalkforwardConfig(
         train_size=504,
@@ -414,7 +565,6 @@ def test_stage06_rejects_stale_tuning_manifests_with_different_primary_loss_metr
         dates=feature_frame["quote_date"].to_list(),
         config=walkforward_config,
     )
-    serialize_splits(splits, manifests_dir / "walkforward_splits.json")
 
     raw_config_path = _write_text(
         tmp_path / "configs" / "data" / "raw.yaml",
@@ -438,6 +588,18 @@ def test_stage06_rejects_stale_tuning_manifests_with_different_primary_loss_metr
             "total_variance_floor: 1.0e-8\n"
             "observed_cell_min_count: 1\n"
         ),
+    )
+    feature_frame = _with_surface_metadata(feature_frame, surface_config_path)
+    feature_path = gold_dir / "daily_features.parquet"
+    feature_frame.write_parquet(feature_path)
+    _serialize_test_splits(
+        splits=splits,
+        split_manifest_path=manifests_dir / "walkforward_splits.json",
+        walkforward_config=walkforward_config,
+        feature_frame=feature_frame,
+        feature_path=feature_path,
+        sample_start_date="2021-01-01",
+        sample_end_date="2023-12-31",
     )
     metrics_config_path = _write_text(
         tmp_path / "configs" / "eval" / "metrics.yaml",

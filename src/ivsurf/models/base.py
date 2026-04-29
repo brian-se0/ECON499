@@ -8,6 +8,9 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
+from ivsurf.cleaning.derived_fields import DECISION_TIMESTAMP_COLUMN
+from ivsurf.features.availability import TARGET_DECISION_TIMESTAMP_COLUMN
+
 
 @dataclass(frozen=True, slots=True)
 class DatasetMatrices:
@@ -21,6 +24,8 @@ class DatasetMatrices:
 
     quote_dates: np.ndarray
     target_dates: np.ndarray
+    decision_timestamps: np.ndarray
+    target_decision_timestamps: np.ndarray
     features: np.ndarray
     targets: np.ndarray
     observed_masks: np.ndarray
@@ -94,6 +99,8 @@ def dataset_to_matrices(frame: pl.DataFrame) -> DatasetMatrices:
     return DatasetMatrices(
         quote_dates=frame["quote_date"].to_numpy(),
         target_dates=frame["target_date"].to_numpy(),
+        decision_timestamps=frame[DECISION_TIMESTAMP_COLUMN].to_numpy(),
+        target_decision_timestamps=frame[TARGET_DECISION_TIMESTAMP_COLUMN].to_numpy(),
         features=frame.select(feature_columns).to_numpy(),
         targets=frame.select(target_columns).to_numpy(),
         observed_masks=frame.select(observed_mask_columns).to_numpy(),

@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 import orjson
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError
@@ -15,12 +16,15 @@ from ivsurf.workflow import tuning_manifest_path
 
 type HyperparameterValue = bool | float | int | str
 
+TUNING_RESULT_SCHEMA_VERSION: Literal["tuning_result_v2"] = "tuning_result_v2"
+
 
 class TuningResult(BaseModel):
     """Serialized Optuna result for one tuned model/profile."""
 
     model_config = ConfigDict(extra="forbid")
 
+    schema_version: Literal["tuning_result_v2"]
     model_name: str
     hpo_profile_name: str
     training_profile_name: str

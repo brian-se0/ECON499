@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import orjson
 import typer
 
 from ivsurf.config import (
@@ -14,7 +15,9 @@ from ivsurf.config import (
     load_yaml_config,
 )
 from ivsurf.exceptions import DataValidationError
+from ivsurf.features.availability import build_feature_availability_manifest
 from ivsurf.features.tabular_dataset import build_daily_feature_dataset
+from ivsurf.io.atomic import write_bytes_atomic
 from ivsurf.io.parquet import scan_parquet_files, write_parquet_frame
 from ivsurf.io.paths import sorted_artifact_files
 from ivsurf.progress import create_progress, iter_with_progress
@@ -23,11 +26,11 @@ from ivsurf.qc.sample_window import (
     sample_window_expr,
     sample_window_label,
 )
-from ivsurf.reproducibility import write_run_manifest
+from ivsurf.reproducibility import sha256_file, write_run_manifest
 from ivsurf.resume import StageResumer, build_resume_context_hash, resume_state_path
 from ivsurf.splits.manifests import serialize_splits
 from ivsurf.splits.walkforward import build_walkforward_splits
-from ivsurf.surfaces.grid import SurfaceGrid
+from ivsurf.surfaces.grid import SurfaceGrid, require_surface_grid_metadata
 
 app = typer.Typer(add_completion=False)
 
@@ -54,6 +57,7 @@ def main(
         message = "No gold surface files found. Run scripts/03_build_surfaces.py first."
         raise FileNotFoundError(message)
     output_path = raw_config.gold_dir / "daily_features.parquet"
+    availability_manifest_path = raw_config.manifests_dir / "feature_availability_manifest.json"
     split_manifest_path = raw_config.manifests_dir / "walkforward_splits.json"
     skipped_dates_manifest_path = raw_config.manifests_dir / "gold_surface_skipped_dates.json"
     resumer = StageResumer(
@@ -67,20 +71,23 @@ def main(
                 walkforward_config_path,
             ],
             input_artifact_paths=gold_files,
-            extra_tokens={"artifact_schema_version": 2},
+            extra_tokens={"artifact_schema_version": 5},
         ),
     )
     resume_item_id = "daily_feature_dataset"
     if resumer.item_complete(
         resume_item_id,
-        required_output_paths=[output_path, split_manifest_path],
+        required_output_paths=[output_path, availability_manifest_path, split_manifest_path],
     ):
         typer.echo(
             "Stage 04 resume: existing daily_features.parquet and walkforward_splits.json "
             "match the current context; skipping rebuild."
         )
         return
-    resumer.clear_item(resume_item_id, output_paths=[output_path, split_manifest_path])
+    resumer.clear_item(
+        resume_item_id,
+        output_paths=[output_path, availability_manifest_path, split_manifest_path],
+    )
     with create_progress() as progress:
         for _gold_path in iter_with_progress(
             progress,
@@ -118,6 +125,7 @@ def main(
             f"{sample_window_label(raw_config)}."
         )
         raise DataValidationError(message)
+    require_surface_grid_metadata(surface_frame, grid, dataset_name="Stage 04 gold surfaces")
 
     daily_dataset = build_daily_feature_dataset(
         surface_frame=surface_frame,
@@ -137,6 +145,12 @@ def main(
         context="Stage 04 daily feature dataset",
     )
     write_parquet_frame(daily_dataset, output_path)
+    availability_manifest = build_feature_availability_manifest(daily_dataset)
+    write_bytes_atomic(
+        availability_manifest_path,
+        orjson.dumps(availability_manifest, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS),
+    )
+    feature_dataset_hash = sha256_file(output_path)
 
     dates = daily_dataset["quote_date"].to_list()
     if any(not isinstance(value, date) for value in dates):
@@ -145,12 +159,21 @@ def main(
     split_hash = serialize_splits(
         splits=build_walkforward_splits(dates=dates, config=walkforward_config),
         output_path=split_manifest_path,
+        walkforward_config=walkforward_config.model_dump(mode="json"),
+        sample_window={
+            "sample_start_date": raw_config.sample_start_date.isoformat(),
+            "sample_end_date": raw_config.sample_end_date.isoformat(),
+        },
+        date_universe=dates,
+        feature_dataset_hash=feature_dataset_hash,
     )
     resumer.mark_complete(
         resume_item_id,
-        output_paths=[output_path, split_manifest_path],
+        output_paths=[output_path, availability_manifest_path, split_manifest_path],
         metadata={
             "feature_rows": daily_dataset.height,
+            "feature_availability_manifest_path": str(availability_manifest_path),
+            "feature_dataset_hash": feature_dataset_hash,
             "split_hash": split_hash,
         },
     )
@@ -170,11 +193,13 @@ def main(
             skipped_dates_manifest_path,
             *gold_files,
         ],
-        output_artifact_paths=[output_path, split_manifest_path],
+        output_artifact_paths=[output_path, availability_manifest_path, split_manifest_path],
         data_manifest_paths=gold_files,
         split_manifest_path=split_manifest_path,
         extra_metadata={
             "feature_rows": daily_dataset.height,
+            "feature_dataset_hash": feature_dataset_hash,
+            "feature_availability_columns": len(availability_manifest),
             "split_hash": split_hash,
             "gold_input_file_count": len(gold_files),
             "sample_window": sample_window_label(raw_config),
