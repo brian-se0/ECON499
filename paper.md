@@ -29,7 +29,8 @@ Table 1 summarizes the sample, walk-forward geometry, and benchmark universe.
 | Gold surfaces built | `4347` |
 | Supervised feature rows | `4325` |
 | Feature columns | `906` |
-| Forecast rows per model | `3633` |
+| Forecast target dates per model | `3,633` |
+| Forecast cell rows per model | `294,273` |
 | Clean evaluation quote-date range | `2006-10-03` through `2021-03-10` |
 | Clean evaluation target-date range | `2006-10-04` through `2021-03-11` |
 
@@ -130,7 +131,7 @@ Feature construction uses only information available by the quote-date decision 
 
 Targets are stored separately and explicitly. Every supervised row includes the next-session completed target surface in total variance, the next-session observed-cell mask, the next-session vega weights, and target-side training weights. These training weights are especially important for the neural model. Observed target cells retain their positive target-day vega weights, while completed-only cells receive unit weight so that a nonzero imputed-cell loss can be applied without collapsing those cells to zero weight.
 
-The resulting daily feature file spans quote dates from `2004-02-03` through `2021-04-08` and target dates from `2004-02-04` through `2021-04-09`. It contains 4,325 rows and 906 columns. The reduction from 4,347 gold surfaces to 4,325 supervised rows is exactly what the design implies: a 22-session warm-up for the longest lag window and the loss of the final date as a target-less terminal observation.
+The resulting daily feature file spans quote dates from `2004-02-03` through `2021-04-08` and target dates from `2004-02-04` through `2021-04-09`. It contains 4,325 rows and 906 columns. The reduction from 4,347 gold surfaces to 4,325 supervised rows reflects the 22-session lag window first becoming available at position 21, requiring 21 prior sessions plus the current quote session, and the loss of the final target-less observation.
 
 A subtle but important point is that the project forecasts the completed next-session surface for every model, not just for the neural model. The observed-cell mask is preserved alongside that completed target and is used later to define the official evaluation slices. This prevents an apples-to-oranges comparison in which some models are trained on dense surfaces but judged against sparse, model-specific observed subsets.
 
@@ -190,11 +191,11 @@ Figure 2 visualizes the primary ranking.
 
 ![Mean observed-cell MSE relative to naive on a log scale.](data/manifests/report_artifacts/hpo_30_trials__train_30_epochs/figures/loss_ranking.svg)
 
-Table 4 reports a compressed primary tail-risk summary.
+Table 3 reports a compressed primary tail-risk summary. Rows are ordered by primary mean-loss rank; the remaining columns report the tail profile of that same daily loss series.
 
-**Table 4. Primary tail-risk summary for `observed_mse_total_variance`.**
+**Table 3. Primary tail-risk summary for `observed_mse_total_variance`.**
 
-| rank | model_name | mean_loss | p95_loss | p99_loss | max_loss |
+| mean_loss_rank | model_name | mean_loss | p95_loss | p99_loss | max_loss |
 | --- | --- | --- | --- | --- | --- |
 | 1 | naive | 0.000028 | 0.000042 | 0.000331 | 0.011255 |
 | 2 | har_factor | 0.000033 | 0.000101 | 0.000308 | 0.010600 |
@@ -210,7 +211,7 @@ The secondary metric tells a more nuanced story. On observed-cell QLIKE in total
 
 That mean, however, must be interpreted carefully. `har_factor` does not dominate `naive` day by day. It improves on `naive` on 1,654 of 3,633 target dates and loses on 1,979. The reason the mean nonetheless favors `har_factor` is that `naive` has a handful of very large QLIKE blowups. Its 95th-percentile QLIKE is only 0.058161, but its maximum daily QLIKE reaches 9,235.519517. By contrast, `har_factor` has a 95th percentile of 0.048978 and a maximum of 1.671184. The saved worst-day table shows that the largest `naive` QLIKE episodes occur late in the sample, including target dates `2020-10-30`, `2021-02-24`, and `2021-02-25`.
 
-The statistical evidence for the secondary story is favorable but less decisive than the primary MSE result. Pairwise Diebold-Mariano tests comparing `naive` to individual challengers produce `p = 0.058619` against `har_factor` and similar p-values against several other challengers, which is consistent with lower mean QLIKE for those models at conventional one-sided levels. The simplified Tmax confidence set retains `har_factor` on the secondary metric. The SPA test against the full challenger set returns `p = 0.098`, just inside the configured alpha of 0.10. The safest interpretation is that the QLIKE evidence is favorable to `har_factor`, but it is still a secondary-loss result and not a reversal of the primary-MSE headline that favors `naive`.
+The statistical evidence for the secondary story is favorable but less decisive than the primary MSE result. Pairwise Diebold-Mariano tests comparing `naive` to individual challengers produce `p = 0.058619` against `har_factor` and similar p-values against several other challengers. These p-values are just above 5% and inside the project’s configured 10% one-sided threshold. The simplified Tmax confidence set retains `har_factor` on the secondary metric. The SPA test against the full challenger set returns `p = 0.098`, also inside the configured alpha of 0.10. The safest interpretation is that the QLIKE evidence is favorable to `har_factor`, but it is still a secondary-loss result and not a reversal of the primary-MSE headline that favors `naive`.
 
 Slice-level results sharpen that interpretation. On the primary metric, `har_factor` posts the best completed-grid maturity-slice losses at the short end: 0.000014 on the 1-day slice versus 0.000026 for `naive`, 0.000006 versus 0.000009 at 7 days, and 0.000005 versus 0.000006 at 14 days. Those correspond to improvements of 44.870188%, 35.310966%, and 16.329552%. Outside that short end, `naive` owns the remaining completed-grid maturity slices. In observed-scope maturity slices, `random_forest` takes only the 1-day slice, with an 8.422732% improvement over `naive`; `naive` is best on the remaining observed-scope maturity slices. On the secondary metric, `har_factor` leads most short-maturity slices and many moneyness slices, while `naive` retains the long end and much of the observed-scope grid. The slice evidence therefore suggests that the learned models are not uniformly useless; it suggests something narrower and more interesting: short-maturity surface dynamics contain forecastable structure, especially under QLIKE and especially for HAR-style factor summaries. That structure is simply not strong enough, in the saved design, to dislodge persistence as the best overall model on the primary thesis metric.
 
@@ -244,9 +245,9 @@ The saved diagnostics also clarify why the neural model must be described as arb
 
 The arbitrage-diagnostic summary reinforces the distinction between soft awareness and hard guarantees. Using the corrected nonuniform-grid, price-convexity diagnostic, `neural_surface` averages 6.150840 calendar-monotonicity violations and 0.069639 butterfly-convexity violations per forecast surface. The corresponding magnitudes are 0.000187 and 0.022733. By contrast, `naive` averages 3.126342 calendar violations and 3.592898 convexity violations, while the actual completed surfaces average 3.003911 and 3.692432. The neural penalties therefore reduce price-convexity violation counts, but they still do not produce hard arbitrage-freeness or rescue forecast accuracy. Appendix Table A2 reports the full arbitrage-diagnostic summary.
 
-Table 5 reports the compressed hedging ranking.
+Table 4 reports the compressed hedging ranking.
 
-**Table 5. Ranked hedging summary.**
+**Table 4. Ranked hedging summary.**
 
 | rank | model_name | mean_abs_revaluation_error | improvement_vs_benchmark_pct |
 | --- | --- | --- | --- |
