@@ -1,0 +1,706 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import orjson
+import polars as pl
+import typer
+
+from ivcast.config import (
+    EvaluationMetricsConfig,
+    HpoProfileConfig,
+    RawDataConfig,
+    ReportArtifactsConfig,
+    StatsTestConfig,
+    SurfaceGridConfig,
+    TrainingProfileConfig,
+    load_yaml_config,
+)
+from ivcast.evaluation.alignment import load_actual_surface_frame, load_forecast_frame
+from ivcast.evaluation.diagnostics import (
+    build_actual_diagnostic_frame,
+    build_forecast_diagnostic_frame,
+    summarize_diagnostic_frame,
+)
+from ivcast.evaluation.interpolation_sensitivity import (
+    build_interpolation_sensitivity_frame,
+    summarize_interpolation_sensitivity,
+)
+from ivcast.evaluation.slice_reports import build_slice_metric_frame
+from ivcast.hedging.validation import (
+    require_hedging_results_match_forecast_coverage,
+    require_hedging_summary_matches_results,
+)
+from ivcast.io.atomic import write_text_atomic
+from ivcast.io.parquet import write_csv_frame, write_parquet_frame
+from ivcast.io.paths import sorted_artifact_files
+from ivcast.progress import create_progress
+from ivcast.reports.figures import (
+    write_ecdf_chart,
+    write_multi_line_chart,
+    write_normalized_log_ranking_chart,
+    write_ranked_bar_chart,
+    write_surface_heatmap,
+)
+from ivcast.reports.tables import (
+    build_dm_results_table,
+    build_mcs_table,
+    build_ranked_hedging_table,
+    build_ranked_loss_table,
+    build_report_overview_markdown,
+    build_slice_leader_table,
+    build_spa_table,
+    build_surface_cell_leader_table,
+    build_tail_risk_table,
+    build_worst_day_drilldown_table,
+    write_table_artifacts,
+)
+from ivcast.reproducibility import (
+    collect_execution_identity,
+    write_run_manifest,
+)
+from ivcast.resume import StageResumer, build_resume_context_hash, resume_state_path
+from ivcast.surfaces.grid import SurfaceGrid
+from ivcast.workflow import resolve_workflow_run_paths
+
+app = typer.Typer(add_completion=False)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _require_file(path: Path) -> Path:
+    if not path.exists():
+        message = f"Required artifact is missing: {path}"
+        raise FileNotFoundError(message)
+    return path
+
+
+def _require_columns(frame: pl.DataFrame, *, columns: tuple[str, ...], artifact_name: str) -> None:
+    missing = [column for column in columns if column not in frame.columns]
+    if not missing:
+        return
+    message = f"{artifact_name} is missing required columns: {missing}."
+    raise ValueError(message)
+
+
+def _write_frame_bundle(
+    output_dir: Path,
+    name: str,
+    frame: pl.DataFrame,
+    *,
+    include_markdown: bool = False,
+) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = output_dir / f"{name}.parquet"
+    csv_path = output_dir / f"{name}.csv"
+    write_parquet_frame(frame, parquet_path)
+    write_csv_frame(frame, csv_path)
+    written = [parquet_path, csv_path]
+    if include_markdown:
+        from ivcast.reports.tables import frame_to_markdown
+
+        markdown_path = output_dir / f"{name}.md"
+        write_text_atomic(markdown_path, frame_to_markdown(frame), encoding="utf-8")
+        written.append(markdown_path)
+    return written
+
+
+def _slice_metric_column_for_primary_loss(primary_loss_metric: str) -> str:
+    for prefix in ("observed_", "full_"):
+        if primary_loss_metric.startswith(prefix):
+            return primary_loss_metric.removeprefix(prefix)
+    message = (
+        "Report primary_loss_metric must begin with 'observed_' or 'full_' to map to "
+        f"slice metrics, found {primary_loss_metric!r}."
+    )
+    raise ValueError(message)
+
+
+def _require_mapping_list(payload: object, *, artifact_name: str) -> list[dict[str, object]]:
+    if not isinstance(payload, list):
+        message = f"{artifact_name} must deserialize to a list of mappings."
+        raise ValueError(message)
+    rows: list[dict[str, object]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            message = f"{artifact_name} must contain only mappings."
+            raise ValueError(message)
+        rows.append(dict(item))
+    return rows
+
+
+def _records_for_loss_metric(
+    rows: list[dict[str, object]],
+    *,
+    loss_metric: str,
+    artifact_name: str,
+) -> list[dict[str, object]]:
+    filtered = [row for row in rows if row.get("loss_metric") == loss_metric]
+    if not filtered:
+        message = f"{artifact_name} does not contain rows for loss_metric={loss_metric!r}."
+        raise ValueError(message)
+    return filtered
+
+
+def _record_for_loss_metric(
+    rows: list[dict[str, object]],
+    *,
+    loss_metric: str,
+    artifact_name: str,
+) -> dict[str, object]:
+    filtered = _records_for_loss_metric(rows, loss_metric=loss_metric, artifact_name=artifact_name)
+    if len(filtered) != 1:
+        message = (
+            f"{artifact_name} must contain exactly one row for loss_metric={loss_metric!r}, "
+            f"found {len(filtered)}."
+        )
+        raise ValueError(message)
+    return filtered[0]
+
+
+@app.command()
+def main(
+    raw_config_path: Path = Path("configs/data/raw.yaml"),
+    surface_config_path: Path = Path("configs/data/surface.yaml"),
+    metrics_config_path: Path = Path("configs/eval/metrics.yaml"),
+    stats_config_path: Path = Path("configs/eval/stats_tests.yaml"),
+    report_config_path: Path = Path("configs/eval/report_artifacts.yaml"),
+    hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
+    training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    run_profile_name: str | None = None,
+    mlflow_tracking_uri: str | None = None,
+    mlflow_experiment_name: str = "ivcast",
+) -> None:
+    started_at = datetime.now(UTC)
+    execution_identity = collect_execution_identity(_repo_root())
+    repo_root = _repo_root()
+    raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
+    surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
+    hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
+    training_profile = TrainingProfileConfig.model_validate(
+        load_yaml_config(training_profile_config_path)
+    )
+    metrics_config = EvaluationMetricsConfig.model_validate(load_yaml_config(metrics_config_path))
+    stats_config = StatsTestConfig.model_validate(load_yaml_config(stats_config_path))
+    report_config = ReportArtifactsConfig.model_validate(load_yaml_config(report_config_path))
+    grid = SurfaceGrid.from_config(surface_config)
+    workflow_paths = resolve_workflow_run_paths(
+        raw_config,
+        hpo_profile_name=hpo_profile.profile_name,
+        training_profile_name=training_profile.profile_name,
+        run_profile_name=run_profile_name,
+    )
+
+    if stats_config.benchmark_model != report_config.benchmark_model:
+        message = (
+            "Report benchmark_model must match configs/eval/stats_tests.yaml "
+            f"({stats_config.benchmark_model} != {report_config.benchmark_model})."
+        )
+        raise ValueError(message)
+    if stats_config.loss_metrics != report_config.official_loss_metrics:
+        message = (
+            "Report official_loss_metrics must exactly match configs/eval/stats_tests.yaml "
+            f"({stats_config.loss_metrics!r} != {report_config.official_loss_metrics!r})."
+        )
+        raise ValueError(message)
+    if metrics_config.primary_loss_metric != report_config.primary_loss_metric:
+        message = (
+            "Report primary_loss_metric must match configs/eval/metrics.yaml "
+            f"({report_config.primary_loss_metric!r} != {metrics_config.primary_loss_metric!r})."
+        )
+        raise ValueError(message)
+
+    stats_dir = workflow_paths.stats_dir
+    hedging_dir = workflow_paths.hedging_dir
+    report_dir = workflow_paths.report_dir
+    tables_dir = report_dir / "tables"
+    details_dir = report_dir / "details"
+    figures_dir = report_dir / "figures"
+
+    panel_path = _require_file(stats_dir / "forecast_realization_panel.parquet")
+    daily_loss_path = _require_file(stats_dir / "daily_loss_frame.parquet")
+    loss_summary_path = _require_file(stats_dir / "loss_summary.parquet")
+    dm_results_path = _require_file(stats_dir / "dm_results.json")
+    spa_result_path = _require_file(stats_dir / "spa_result.json")
+    mcs_result_path = _require_file(stats_dir / "mcs_result.json")
+    hedging_results_path = _require_file(hedging_dir / "hedging_results.parquet")
+    hedging_summary_path = _require_file(hedging_dir / "hedging_summary.parquet")
+    forecast_paths = sorted_artifact_files(workflow_paths.forecast_dir, "*.parquet")
+    forecast_reuse_manifest_paths = []
+    if run_profile_name is not None:
+        forecast_reuse_manifest_path = (
+            raw_config.manifests_dir / "forecast_profile_reuse" / f"{run_profile_name}.json"
+        )
+        if forecast_reuse_manifest_path.exists():
+            forecast_reuse_manifest_paths.append(forecast_reuse_manifest_path)
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "09_make_report_artifacts"),
+        stage_name="09_make_report_artifacts",
+        context_hash=build_resume_context_hash(
+            execution_identity=execution_identity,
+            config_paths=[
+                raw_config_path,
+                surface_config_path,
+                metrics_config_path,
+                stats_config_path,
+                report_config_path,
+                hpo_profile_config_path,
+                training_profile_config_path,
+            ],
+            input_artifact_paths=[
+                panel_path,
+                daily_loss_path,
+                loss_summary_path,
+                dm_results_path,
+                spa_result_path,
+                mcs_result_path,
+                hedging_results_path,
+                hedging_summary_path,
+                raw_config.manifests_dir / "gold_surface_summary.json",
+                *forecast_reuse_manifest_paths,
+                *forecast_paths,
+            ],
+            extra_tokens={
+                "run_profile_name": run_profile_name,
+                "workflow_run_label": workflow_paths.run_label,
+                "artifact_schema_version": 2,
+            },
+        ),
+    )
+
+    with create_progress() as progress:
+        task_id = progress.add_task("Stage 09 report artifact generation", total=6)
+
+        progress.update(task_id, description="Stage 09 loading saved artifacts")
+        actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir, grid)
+        forecast_frame = load_forecast_frame(workflow_paths.forecast_dir, grid)
+        panel = pl.read_parquet(panel_path)
+        daily_loss_frame = pl.read_parquet(daily_loss_path)
+        loss_summary = pl.read_parquet(loss_summary_path)
+        hedging_results = pl.read_parquet(hedging_results_path)
+        hedging_summary = pl.read_parquet(hedging_summary_path)
+        require_hedging_results_match_forecast_coverage(hedging_results, forecast_frame)
+        require_hedging_summary_matches_results(hedging_summary, hedging_results)
+        dm_results = _require_mapping_list(
+            orjson.loads(dm_results_path.read_bytes()),
+            artifact_name="dm_results.json",
+        )
+        spa_results = _require_mapping_list(
+            orjson.loads(spa_result_path.read_bytes()),
+            artifact_name="spa_result.json",
+        )
+        mcs_results = _require_mapping_list(
+            orjson.loads(mcs_result_path.read_bytes()),
+            artifact_name="mcs_result.json",
+        )
+        progress.advance(task_id)
+
+        progress.update(task_id, description="Stage 09 computing slice and diagnostic reports")
+        slice_metric_frame = build_slice_metric_frame(
+            panel=panel,
+            positive_floor=metrics_config.positive_floor,
+            stress_windows=report_config.stress_windows,
+        )
+        forecast_diagnostics = build_forecast_diagnostic_frame(forecast_frame, grid)
+        evaluation_target_dates = forecast_frame["target_date"].unique().to_list()
+        actual_diagnostics = build_actual_diagnostic_frame(
+            actual_surface_frame.filter(pl.col("quote_date").is_in(evaluation_target_dates)),
+            grid,
+        )
+        combined_diagnostics = pl.concat([forecast_diagnostics, actual_diagnostics]).sort(
+            ["model_name", "quote_date", "target_date"]
+        )
+        diagnostic_summary = summarize_diagnostic_frame(combined_diagnostics)
+
+        interpolation_sensitivity = build_interpolation_sensitivity_frame(
+            actual_surface_frame,
+            grid=grid,
+            surface_config=surface_config,
+            alternate_order=report_config.interpolation_comparison_order,
+            interpolation_cycles=report_config.interpolation_cycles,
+        )
+        interpolation_summary = summarize_interpolation_sensitivity(interpolation_sensitivity)
+        progress.advance(task_id)
+
+        progress.update(task_id, description="Stage 09 building report tables")
+        primary_summary_mean_column = f"mean_{report_config.primary_loss_metric}"
+        ranked_loss_tables_by_metric: dict[str, pl.DataFrame] = {}
+        slice_leader_tables_by_metric: dict[str, pl.DataFrame] = {}
+        mcs_tables_by_metric: dict[str, pl.DataFrame] = {}
+        tail_risk_tables_by_metric: dict[str, pl.DataFrame] = {}
+        worst_day_tables_by_metric: dict[str, pl.DataFrame] = {}
+        best_loss_by_metric_rows: list[dict[str, object]] = []
+        ranked_hedging_table = build_ranked_hedging_table(
+            hedging_summary=hedging_summary,
+            benchmark_model=report_config.benchmark_model,
+        )
+        surface_cell_leader_table = build_surface_cell_leader_table(
+            panel=panel,
+            benchmark_model=report_config.benchmark_model,
+        )
+        tables: dict[str, pl.DataFrame] = {
+            "ranked_hedging_summary": ranked_hedging_table,
+            "arbitrage_diagnostic_summary": diagnostic_summary,
+            "interpolation_sensitivity_summary": interpolation_summary,
+            "surface_cell_leaders": surface_cell_leader_table,
+        }
+        all_models = loss_summary["model_name"].to_list()
+        for loss_metric in report_config.official_loss_metrics:
+            summary_mean_column = f"mean_{loss_metric}"
+            summary_std_column = f"std_{loss_metric}"
+            _require_columns(
+                loss_summary,
+                columns=(summary_mean_column, summary_std_column, "model_name"),
+                artifact_name="loss_summary.parquet",
+            )
+            ranked_loss_table = build_ranked_loss_table(
+                loss_summary=loss_summary,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=summary_mean_column,
+            )
+            dm_table = build_dm_results_table(
+                _records_for_loss_metric(
+                    dm_results,
+                    loss_metric=loss_metric,
+                    artifact_name="dm_results.json",
+                )
+            )
+            spa_table = build_spa_table(
+                _record_for_loss_metric(
+                    spa_results,
+                    loss_metric=loss_metric,
+                    artifact_name="spa_result.json",
+                )
+            )
+            mcs_table = build_mcs_table(
+                _record_for_loss_metric(
+                    mcs_results,
+                    loss_metric=loss_metric,
+                    artifact_name="mcs_result.json",
+                ),
+                all_models=all_models,
+            )
+            slice_leader_table = build_slice_leader_table(
+                slice_metric_frame=slice_metric_frame,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=_slice_metric_column_for_primary_loss(loss_metric),
+            )
+            tail_risk_table = build_tail_risk_table(
+                daily_loss_frame=daily_loss_frame,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=loss_metric,
+            )
+            worst_day_table = build_worst_day_drilldown_table(
+                daily_loss_frame=daily_loss_frame,
+                benchmark_model=report_config.benchmark_model,
+                metric_column=loss_metric,
+            )
+            ranked_loss_tables_by_metric[loss_metric] = ranked_loss_table
+            slice_leader_tables_by_metric[loss_metric] = slice_leader_table
+            mcs_tables_by_metric[loss_metric] = mcs_table
+            tail_risk_tables_by_metric[loss_metric] = tail_risk_table
+            worst_day_tables_by_metric[loss_metric] = worst_day_table
+            best_loss_row = ranked_loss_table.row(0, named=True)
+            best_loss_by_metric_rows.append(
+                {
+                    "loss_metric": loss_metric,
+                    "model_name": str(best_loss_row["model_name"]),
+                    "metric_value": float(best_loss_row[summary_mean_column]),
+                }
+            )
+            suffix = f"__{loss_metric}"
+            tables[f"ranked_loss_summary{suffix}"] = ranked_loss_table
+            tables[f"dm_results{suffix}"] = dm_table
+            tables[f"spa_result{suffix}"] = spa_table
+            tables[f"mcs_result{suffix}"] = mcs_table
+            tables[f"slice_leaders{suffix}"] = slice_leader_table
+            tables[f"tail_risk_summary{suffix}"] = tail_risk_table
+            tables[f"worst_day_drilldown{suffix}"] = worst_day_table
+            if loss_metric == report_config.primary_loss_metric:
+                tables["ranked_loss_summary"] = ranked_loss_table
+                tables["dm_results"] = dm_table
+                tables["spa_result"] = spa_table
+                tables["mcs_result"] = mcs_table
+                tables["slice_leaders"] = slice_leader_table
+                tables["tail_risk_summary"] = tail_risk_table
+                tables["worst_day_drilldown"] = worst_day_table
+
+        primary_ranked_loss_table = ranked_loss_tables_by_metric[report_config.primary_loss_metric]
+        primary_slice_leader_table = slice_leader_tables_by_metric[
+            report_config.primary_loss_metric
+        ]
+        primary_mcs_table = mcs_tables_by_metric[report_config.primary_loss_metric]
+        primary_tail_risk_table = tail_risk_tables_by_metric[report_config.primary_loss_metric]
+        primary_worst_day_drilldown = worst_day_tables_by_metric[
+            report_config.primary_loss_metric
+        ]
+        table_names = tuple(tables.keys())
+        table_output_paths = [
+            path
+            for name in table_names
+            for path in (tables_dir / f"{name}.csv", tables_dir / f"{name}.md")
+        ]
+
+        if resumer.item_complete("report_tables", required_output_paths=table_output_paths):
+            table_paths = table_output_paths
+        else:
+            resumer.clear_item("report_tables", output_paths=table_output_paths)
+            table_paths = write_table_artifacts(tables_dir, tables=tables)
+            resumer.mark_complete(
+                "report_tables",
+                output_paths=table_paths,
+                metadata={"table_count": len(table_names)},
+            )
+        progress.advance(task_id)
+
+        progress.update(task_id, description="Stage 09 writing detailed report frames")
+        detail_names = (
+            "slice_metric_frame",
+            "forecast_diagnostics",
+            "actual_diagnostics",
+            "combined_diagnostics",
+            "interpolation_sensitivity",
+            "daily_loss_frame",
+            "hedging_results",
+        )
+        detail_output_paths = [
+            path
+            for name in detail_names
+            for path in (details_dir / f"{name}.parquet", details_dir / f"{name}.csv")
+        ]
+        if resumer.item_complete("report_details", required_output_paths=detail_output_paths):
+            detail_paths = detail_output_paths
+        else:
+            resumer.clear_item("report_details", output_paths=detail_output_paths)
+            detail_paths = []
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "slice_metric_frame", slice_metric_frame)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "forecast_diagnostics", forecast_diagnostics)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "actual_diagnostics", actual_diagnostics)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "combined_diagnostics", combined_diagnostics)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(
+                    details_dir,
+                    "interpolation_sensitivity",
+                    interpolation_sensitivity,
+                )
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "daily_loss_frame", daily_loss_frame)
+            )
+            detail_paths.extend(
+                _write_frame_bundle(details_dir, "hedging_results", hedging_results)
+            )
+            resumer.mark_complete(
+                "report_details",
+                output_paths=detail_paths,
+                metadata={"detail_bundle_count": len(detail_names)},
+            )
+        progress.advance(task_id)
+
+        progress.update(task_id, description="Stage 09 rendering report figures")
+        top_models = tuple(
+            primary_ranked_loss_table.head(report_config.top_models_per_figure)[
+                "model_name"
+            ].to_list()
+        )
+        expected_figure_paths = [
+            figures_dir / "loss_ranking.svg",
+            figures_dir / "surface_performance_heatmap.svg",
+            figures_dir / "hedging_ranking.svg",
+            figures_dir / "calendar_violation_ranking.svg",
+            figures_dir / "interpolation_sensitivity_worst_days.svg",
+            figures_dir / "interpolation_sensitivity_ecdf.svg",
+            figures_dir / "maturity_slice_wrmse.svg",
+            figures_dir / "moneyness_slice_wrmse.svg",
+        ]
+        if resumer.item_complete("report_figures", required_output_paths=expected_figure_paths):
+            figure_paths = expected_figure_paths
+        else:
+            resumer.clear_item("report_figures", output_paths=expected_figure_paths)
+            figure_paths = [
+                write_normalized_log_ranking_chart(
+                    primary_ranked_loss_table,
+                    label_column="model_name",
+                    value_column=primary_summary_mean_column,
+                    benchmark_label=report_config.benchmark_model,
+                    output_path=figures_dir / "loss_ranking.svg",
+                    title=(
+                        f"Mean {report_config.primary_loss_metric} "
+                        f"relative to {report_config.benchmark_model}"
+                    ),
+                ),
+                write_surface_heatmap(
+                    surface_cell_leader_table,
+                    x_column="moneyness_point",
+                    y_column="maturity_days",
+                    winner_column="best_model_name",
+                    improvement_column="improvement_vs_benchmark_pct",
+                    output_path=figures_dir / "surface_performance_heatmap.svg",
+                    title="Best model by surface cell on observed-scope primary MSE",
+                    x_label="Log-moneyness",
+                    y_label="Maturity (days)",
+                ),
+                write_ranked_bar_chart(
+                    ranked_hedging_table,
+                    label_column="model_name",
+                    value_column="mean_abs_revaluation_error",
+                    output_path=figures_dir / "hedging_ranking.svg",
+                    title="Hedging Revaluation Ranking",
+                    top_n=report_config.top_models_per_figure,
+                ),
+                write_ranked_bar_chart(
+                    diagnostic_summary,
+                    label_column="model_name",
+                    value_column="mean_calendar_violation_magnitude",
+                    output_path=figures_dir / "calendar_violation_ranking.svg",
+                    title="Average Calendar Violation Magnitude",
+                    top_n=diagnostic_summary.height,
+                ),
+                write_ranked_bar_chart(
+                    interpolation_sensitivity.sort("max_abs_diff", descending=True).head(15),
+                    label_column="quote_date",
+                    value_column="max_abs_diff",
+                    output_path=figures_dir / "interpolation_sensitivity_worst_days.svg",
+                    title="Worst Interpolation-Order Sensitivity Days",
+                    top_n=15,
+                ),
+                write_ecdf_chart(
+                    interpolation_sensitivity,
+                    value_column="rmse_diff",
+                    output_path=figures_dir / "interpolation_sensitivity_ecdf.svg",
+                    title="Interpolation-order sensitivity across quote dates",
+                    x_label="Daily RMSE difference",
+                    y_label="Empirical CDF",
+                ),
+                write_multi_line_chart(
+                    slice_metric_frame.filter(
+                        (pl.col("slice_family") == "maturity")
+                        & (pl.col("evaluation_scope") == "observed")
+                    ),
+                    x_column="slice_value_float",
+                    y_column="wrmse_total_variance",
+                    series_column="model_name",
+                    output_path=figures_dir / "maturity_slice_wrmse.svg",
+                    title="Observed-Cell WRMSE by Maturity Slice",
+                    x_label="Maturity (days)",
+                    y_label="WRMSE total variance",
+                    include_series=top_models,
+                ),
+                write_multi_line_chart(
+                    slice_metric_frame.filter(
+                        (pl.col("slice_family") == "moneyness")
+                        & (pl.col("evaluation_scope") == "observed")
+                    ),
+                    x_column="slice_value_float",
+                    y_column="wrmse_total_variance",
+                    series_column="model_name",
+                    output_path=figures_dir / "moneyness_slice_wrmse.svg",
+                    title="Observed-Cell WRMSE by Moneyness Slice",
+                    x_label="Log-moneyness",
+                    y_label="WRMSE total variance",
+                    include_series=top_models,
+                ),
+            ]
+            resumer.mark_complete(
+                "report_figures",
+                output_paths=figure_paths,
+                metadata={"figure_count": len(figure_paths)},
+            )
+        progress.advance(task_id)
+
+        progress.update(task_id, description="Stage 09 writing report index")
+        overview_path = report_dir / "index.md"
+        if not resumer.item_complete("report_index", required_output_paths=[overview_path]):
+            resumer.clear_item("report_index", output_paths=[overview_path])
+            write_text_atomic(
+                overview_path,
+                build_report_overview_markdown(
+                    benchmark_model=report_config.benchmark_model,
+                    official_loss_metrics=report_config.official_loss_metrics,
+                    primary_loss_metric=report_config.primary_loss_metric,
+                    best_loss_by_metric_rows=best_loss_by_metric_rows,
+                    summary_metric_column=primary_summary_mean_column,
+                    ranked_loss_table=primary_ranked_loss_table,
+                    tail_risk_table=primary_tail_risk_table,
+                    worst_day_drilldown=primary_worst_day_drilldown,
+                    ranked_hedging_table=ranked_hedging_table,
+                    mcs_table=primary_mcs_table,
+                    slice_leader_table=primary_slice_leader_table,
+                    interpolation_summary=interpolation_summary,
+                ),
+                encoding="utf-8",
+            )
+            resumer.mark_complete(
+                "report_index",
+                output_paths=[overview_path],
+                metadata={"report_dir": str(report_dir)},
+            )
+        progress.advance(task_id)
+
+    run_manifest_path = write_run_manifest(
+        execution_identity=execution_identity,
+        manifests_dir=raw_config.manifests_dir,
+        repo_root=repo_root,
+        script_name="09_make_report_artifacts",
+        started_at=started_at,
+        config_paths=[
+            raw_config_path,
+            surface_config_path,
+            metrics_config_path,
+            stats_config_path,
+            report_config_path,
+            hpo_profile_config_path,
+            training_profile_config_path,
+        ],
+        input_artifact_paths=[
+            panel_path,
+            daily_loss_path,
+            loss_summary_path,
+            dm_results_path,
+            spa_result_path,
+            mcs_result_path,
+            hedging_results_path,
+            hedging_summary_path,
+            raw_config.manifests_dir / "gold_surface_summary.json",
+            *forecast_reuse_manifest_paths,
+            *forecast_paths,
+        ],
+        output_artifact_paths=[overview_path, *table_paths, *detail_paths, *figure_paths],
+        data_manifest_paths=[
+            panel_path,
+            daily_loss_path,
+            loss_summary_path,
+            hedging_results_path,
+            hedging_summary_path,
+            raw_config.manifests_dir / "gold_surface_summary.json",
+            *forecast_reuse_manifest_paths,
+            *forecast_paths,
+        ],
+        random_seed=stats_config.bootstrap_seed,
+        extra_metadata={
+            "report_dir": str(report_dir),
+            "top_models_for_figures": list(top_models),
+            "run_profile_name": run_profile_name,
+            "workflow_run_label": workflow_paths.run_label,
+            "resume_context_hash": resumer.context_hash,
+        },
+        mlflow_tracking_uri=mlflow_tracking_uri,
+        mlflow_experiment_name=mlflow_experiment_name,
+    )
+    typer.echo(f"Saved report artifacts to {report_dir}")
+    typer.echo(f"Saved run manifest to {run_manifest_path}")
+
+
+if __name__ == "__main__":
+    app()

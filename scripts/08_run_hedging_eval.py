@@ -1,0 +1,339 @@
+from __future__ import annotations
+
+from dataclasses import asdict
+from datetime import UTC, datetime
+from pathlib import Path
+
+import polars as pl
+import typer
+
+from ivcast.config import (
+    EvaluationMetricsConfig,
+    HedgingConfig,
+    HpoProfileConfig,
+    RawDataConfig,
+    SurfaceGridConfig,
+    TrainingProfileConfig,
+    load_yaml_config,
+)
+from ivcast.evaluation.alignment import (
+    assert_forecast_origins_after_hpo_boundary,
+    load_actual_surface_frame,
+    load_daily_spot_frame,
+    load_forecast_frame,
+    require_forecast_surface_grid,
+)
+from ivcast.hedging.pnl import evaluate_model_hedging, summarize_hedging_results
+from ivcast.hedging.revaluation import surface_interpolator_from_frame
+from ivcast.hedging.validation import (
+    require_hedging_config_in_surface_domain,
+    require_hedging_results_match_forecast_coverage,
+    require_hedging_spot_paths_in_surface_domain,
+    require_hedging_summary_matches_results,
+)
+from ivcast.io.parquet import read_parquet_files, write_parquet_frame
+from ivcast.io.paths import sorted_artifact_files
+from ivcast.progress import create_progress
+from ivcast.reproducibility import (
+    collect_execution_identity,
+    write_run_manifest,
+)
+from ivcast.resume import StageResumer, build_resume_context_hash, resume_state_path
+from ivcast.surfaces.grid import SurfaceGrid
+from ivcast.training.model_factory import TUNABLE_MODEL_NAMES
+from ivcast.training.tuning import (
+    load_required_tuning_results,
+    require_consistent_clean_evaluation_policy,
+    require_matching_primary_loss_metric,
+)
+from ivcast.workflow import resolve_workflow_run_paths
+
+app = typer.Typer(add_completion=False)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _actual_surface_lookup(actual_surface_frame: pl.DataFrame) -> dict[object, pl.DataFrame]:
+    groups = actual_surface_frame.partition_by("quote_date", as_dict=True)
+    return {key[0]: value for key, value in groups.items()}
+
+
+@app.command()
+def main(
+    raw_config_path: Path = Path("configs/data/raw.yaml"),
+    surface_config_path: Path = Path("configs/data/surface.yaml"),
+    metrics_config_path: Path = Path("configs/eval/metrics.yaml"),
+    hedging_config_path: Path = Path("configs/eval/hedging.yaml"),
+    hpo_profile_config_path: Path = Path("configs/workflow/hpo_30_trials.yaml"),
+    training_profile_config_path: Path = Path("configs/workflow/train_30_epochs.yaml"),
+    run_profile_name: str | None = None,
+    mlflow_tracking_uri: str | None = None,
+    mlflow_experiment_name: str = "ivcast",
+) -> None:
+    """Run stage 08 hedging evaluation with median valid active-spot states."""
+
+    started_at = datetime.now(UTC)
+    execution_identity = collect_execution_identity(_repo_root())
+    raw_config = RawDataConfig.model_validate(load_yaml_config(raw_config_path))
+    surface_config = SurfaceGridConfig.model_validate(load_yaml_config(surface_config_path))
+    metrics_config = EvaluationMetricsConfig.model_validate(load_yaml_config(metrics_config_path))
+    hpo_profile = HpoProfileConfig.model_validate(load_yaml_config(hpo_profile_config_path))
+    training_profile = TrainingProfileConfig.model_validate(
+        load_yaml_config(training_profile_config_path)
+    )
+    hedging_config = HedgingConfig.model_validate(load_yaml_config(hedging_config_path))
+    grid = SurfaceGrid.from_config(surface_config)
+    workflow_paths = resolve_workflow_run_paths(
+        raw_config,
+        hpo_profile_name=hpo_profile.profile_name,
+        training_profile_name=training_profile.profile_name,
+        run_profile_name=run_profile_name,
+    )
+
+    forecast_paths = sorted_artifact_files(workflow_paths.forecast_dir, "*.parquet")
+    forecast_reuse_manifest_paths = []
+    if run_profile_name is not None:
+        forecast_reuse_manifest_path = (
+            raw_config.manifests_dir / "forecast_profile_reuse" / f"{run_profile_name}.json"
+        )
+        if forecast_reuse_manifest_path.exists():
+            forecast_reuse_manifest_paths.append(forecast_reuse_manifest_path)
+    tuning_manifest_paths = [
+        raw_config.manifests_dir / "tuning" / hpo_profile.profile_name / f"{model_name}.json"
+        for model_name in TUNABLE_MODEL_NAMES
+    ]
+    output_dir = workflow_paths.hedging_dir
+    by_model_dir = output_dir / "by_model"
+    resumer = StageResumer(
+        state_path=resume_state_path(raw_config.manifests_dir, "08_run_hedging_eval"),
+        stage_name="08_run_hedging_eval",
+        context_hash=build_resume_context_hash(
+            execution_identity=execution_identity,
+            config_paths=[
+                raw_config_path,
+                surface_config_path,
+                metrics_config_path,
+                hedging_config_path,
+                hpo_profile_config_path,
+                training_profile_config_path,
+            ],
+            input_artifact_paths=[
+                raw_config.manifests_dir / "gold_surface_summary.json",
+                raw_config.manifests_dir / "silver_build_summary.json",
+                *forecast_reuse_manifest_paths,
+                *tuning_manifest_paths,
+                *forecast_paths,
+            ],
+            extra_tokens={
+                "run_profile_name": run_profile_name,
+                "workflow_run_label": workflow_paths.run_label,
+                "artifact_schema_version": 2,
+            },
+        ),
+    )
+    tuning_results = load_required_tuning_results(
+        raw_config.manifests_dir,
+        hpo_profile_name=hpo_profile.profile_name,
+        model_names=TUNABLE_MODEL_NAMES,
+    )
+    require_matching_primary_loss_metric(
+        tuning_results.values(),
+        expected_primary_loss_metric=metrics_config.primary_loss_metric,
+    )
+    clean_evaluation_policy = require_consistent_clean_evaluation_policy(tuning_results.values())
+
+    forecast_frame = load_forecast_frame(workflow_paths.forecast_dir, grid)
+    assert_forecast_origins_after_hpo_boundary(
+        forecast_frame,
+        max_hpo_validation_date=clean_evaluation_policy.max_hpo_validation_date,
+    )
+
+    actual_surface_frame = load_actual_surface_frame(raw_config.gold_dir, grid)
+    # For SPX/index data the vendor underlying bid/ask fields may be zero, so stage 08 derives
+    # one daily spot contract from the median active_underlying_price_1545 across valid rows.
+    spot_frame = load_daily_spot_frame(raw_config.silver_dir)
+    spot_lookup = {
+        row["quote_date"]: float(row["spot_1545"]) for row in spot_frame.iter_rows(named=True)
+    }
+    actual_lookup = _actual_surface_lookup(actual_surface_frame)
+    forecast_calendar_gaps = [
+        (row["target_date"] - row["quote_date"]).days
+        for row in forecast_frame.unique(["quote_date", "target_date"]).iter_rows(named=True)
+    ]
+    if not forecast_calendar_gaps:
+        message = "Stage 08 requires at least one forecast quote/target date pair."
+        raise ValueError(message)
+    require_hedging_config_in_surface_domain(
+        hedging_config,
+        grid,
+        max_target_gap_days=max(forecast_calendar_gaps),
+    )
+    require_hedging_spot_paths_in_surface_domain(
+        hedging_config,
+        grid,
+        forecast_frame=forecast_frame,
+        spot_lookup=spot_lookup,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    by_model_dir.mkdir(parents=True, exist_ok=True)
+
+    model_output_paths: list[Path] = []
+    model_names = tuple(
+        str(value)
+        for value in forecast_frame.select("model_name")
+        .unique()
+        .sort("model_name")["model_name"]
+        .to_list()
+    )
+    with create_progress() as progress:
+        task_id = progress.add_task("Stage 08 hedging evaluation", total=len(model_names))
+        for model_name in model_names:
+            model_forecast_frame = forecast_frame.filter(pl.col("model_name") == model_name).sort(
+                ["model_name", "quote_date", "target_date", "maturity_index", "moneyness_index"]
+            )
+            require_forecast_surface_grid(
+                model_forecast_frame,
+                grid,
+                dataset_name=f"Forecast artifact for model {model_name}",
+            )
+            if model_forecast_frame.is_empty():
+                message = f"Forecast artifact for model {model_name} is empty."
+                raise ValueError(message)
+            model_output_path = by_model_dir / f"{model_name}.parquet"
+            model_output_paths.append(model_output_path)
+            if resumer.item_complete(model_name, required_output_paths=[model_output_path]):
+                progress.update(
+                    task_id,
+                    description=f"Stage 08 resume: skipping completed model {model_name}",
+                )
+                progress.advance(task_id)
+                continue
+            resumer.clear_item(model_name, output_paths=[model_output_path])
+            progress.update(task_id, description=f"Stage 08 hedging model {model_name}")
+
+            results: list[dict[str, object]] = []
+            for group in model_forecast_frame.partition_by(
+                ["model_name", "quote_date", "target_date"],
+                maintain_order=True,
+            ):
+                quote_date = group["quote_date"][0]
+                target_date = group["target_date"][0]
+                if quote_date not in actual_lookup or target_date not in actual_lookup:
+                    message = (
+                        f"Missing actual surface for quote_date={quote_date} "
+                        f"or target_date={target_date}."
+                    )
+                    raise ValueError(message)
+                if quote_date not in spot_lookup or target_date not in spot_lookup:
+                    message = (
+                        f"Missing spot state for quote_date={quote_date} "
+                        f"or target_date={target_date}."
+                    )
+                    raise ValueError(message)
+
+                result = evaluate_model_hedging(
+                    model_name=model_name,
+                    quote_date=quote_date,
+                    target_date=target_date,
+                    trade_spot=spot_lookup[quote_date],
+                    target_spot=spot_lookup[target_date],
+                    actual_surface_t=surface_interpolator_from_frame(
+                        actual_lookup[quote_date],
+                        total_variance_column="completed_total_variance",
+                        grid=grid,
+                    ),
+                    actual_surface_t1=surface_interpolator_from_frame(
+                        actual_lookup[target_date],
+                        total_variance_column="completed_total_variance",
+                        grid=grid,
+                    ),
+                    predicted_surface_t1=surface_interpolator_from_frame(
+                        group,
+                        total_variance_column="predicted_total_variance",
+                        grid=grid,
+                    ),
+                    rate=hedging_config.risk_free_rate,
+                    level_notional=hedging_config.level_notional,
+                    skew_notional=hedging_config.skew_notional,
+                    calendar_notional=hedging_config.calendar_notional,
+                    skew_moneyness_abs=hedging_config.skew_moneyness_abs,
+                    short_maturity_days=hedging_config.short_maturity_days,
+                    long_maturity_days=hedging_config.long_maturity_days,
+                    hedge_maturity_days=hedging_config.hedge_maturity_days,
+                    hedge_straddle_moneyness=hedging_config.hedge_straddle_moneyness,
+                    hedge_vega_floor=hedging_config.hedge_vega_floor,
+                )
+                results.append(asdict(result))
+
+            results_frame = pl.DataFrame(results).sort(["model_name", "quote_date", "target_date"])
+            write_parquet_frame(results_frame, model_output_path)
+            resumer.mark_complete(
+                model_name,
+                output_paths=[model_output_path],
+                metadata={"model_name": model_name, "n_results": results_frame.height},
+            )
+            progress.advance(task_id)
+
+    results_frame = read_parquet_files(model_output_paths).sort(
+        ["model_name", "quote_date", "target_date"]
+    )
+    hedging_results_path = output_dir / "hedging_results.parquet"
+    hedging_summary_path = output_dir / "hedging_summary.parquet"
+    require_hedging_results_match_forecast_coverage(results_frame, forecast_frame)
+    write_parquet_frame(results_frame, hedging_results_path)
+    summary_frame = summarize_hedging_results(results_frame)
+    require_hedging_summary_matches_results(summary_frame, results_frame)
+    write_parquet_frame(summary_frame, hedging_summary_path)
+    run_manifest_path = write_run_manifest(
+        execution_identity=execution_identity,
+        manifests_dir=raw_config.manifests_dir,
+        repo_root=_repo_root(),
+        script_name="08_run_hedging_eval",
+        started_at=started_at,
+        config_paths=[
+            raw_config_path,
+            surface_config_path,
+            metrics_config_path,
+            hedging_config_path,
+            hpo_profile_config_path,
+            training_profile_config_path,
+        ],
+        input_artifact_paths=[
+            raw_config.manifests_dir / "gold_surface_summary.json",
+            raw_config.manifests_dir / "silver_build_summary.json",
+            *forecast_reuse_manifest_paths,
+            *tuning_manifest_paths,
+            *forecast_paths,
+        ],
+        output_artifact_paths=[hedging_results_path, hedging_summary_path, *model_output_paths],
+        data_manifest_paths=[
+            raw_config.manifests_dir / "gold_surface_summary.json",
+            raw_config.manifests_dir / "silver_build_summary.json",
+            *forecast_reuse_manifest_paths,
+            *tuning_manifest_paths,
+            *forecast_paths,
+        ],
+        extra_metadata={
+            "benchmark_model": "naive",
+            "n_results": results_frame.height,
+            "hedge_spot_assumption": "naive",
+            "spot_source": "median_valid_active_underlying_price_1545",
+            "primary_loss_metric": metrics_config.primary_loss_metric,
+            "max_hpo_validation_date": clean_evaluation_policy.max_hpo_validation_date.isoformat(),
+            "first_clean_test_split_id": clean_evaluation_policy.first_clean_test_split_id,
+            "run_profile_name": run_profile_name,
+            "workflow_run_label": workflow_paths.run_label,
+            "resume_context_hash": resumer.context_hash,
+        },
+        mlflow_tracking_uri=mlflow_tracking_uri,
+        mlflow_experiment_name=mlflow_experiment_name,
+    )
+    typer.echo(f"Saved hedging outputs to {output_dir}")
+    typer.echo(f"Saved run manifest to {run_manifest_path}")
+
+
+if __name__ == "__main__":
+    app()

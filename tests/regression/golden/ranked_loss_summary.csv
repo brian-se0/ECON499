@@ -1,0 +1,4 @@
+rank,model_name,mean_observed_mse_total_variance,std_observed_mse_total_variance,n_target_dates,improvement_vs_benchmark_pct
+1,ridge,7.704600101868477e-06,1.386095362718178e-06,3,7.222085791329269
+2,neural_surface,7.762516687665864e-06,1.3965086379922563e-06,3,6.5246608818825145
+3,naive,8.304347179588167e-06,2.7819973109257774e-06,3,0.0

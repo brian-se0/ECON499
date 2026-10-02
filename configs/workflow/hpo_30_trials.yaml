@@ -1,0 +1,10 @@
+profile_name: "hpo_30_trials"
+n_trials: 30
+tuning_splits_count: 3
+seed: 7
+sampler: "tpe"
+pruner:
+  name: "median"
+  n_startup_trials: 5
+  n_warmup_steps: 1
+  interval_steps: 1

@@ -1,0 +1,59 @@
+raw_options_dir: "/Volumes/T9/Options Data"
+bronze_dir: "data/bronze"
+silver_dir: "data/silver"
+gold_dir: "data/gold"
+manifests_dir: "data/manifests"
+raw_file_glob: "UnderlyingOptionsEODCalcs_*.zip"
+target_symbol: "^SPX"
+# The thesis universe is SPX-underlying options, which includes SPX and SPXW roots
+# whenever underlying_symbol remains ^SPX.
+calendar_name: "XNYS"
+timezone: "America/New_York"
+decision_time: "15:45:00"
+decision_snapshot_minutes_before_close: 15
+sample_start_date: "2004-01-02"
+sample_end_date: "2021-04-09"
+# Economic settlement convention (maturity coordinate). AM-settled contracts settle at the
+# 09:30 ET open of the settlement session; all other roots settle at that session's close.
+# Before the 2010 symbology change, standard SPX monthlies and LEAPS were listed under many
+# alternate roots; every one below carries only Saturday (standard AM) expirations in the
+# archive. JXA/JXB/JXD/JXE are the original AM-settled SPX Weeklys (Cboe IC05-138).
+# Quarterly roots (SPXQ, SPXPM, SAQ, SLQ, SQP, ...) and SPXW are PM-settled.
+am_settled_roots:
+  - "SPX"
+  - "JXA"
+  - "JXB"
+  - "JXD"
+  - "JXE"
+  - "SPB"
+  - "SPL"
+  - "SPQ"
+  - "SPT"
+  - "SPV"
+  - "SPZ"
+  - "SVP"
+  - "SXB"
+  - "SXG"
+  - "SXJ"
+  - "SXM"
+  - "SXY"
+  - "SXZ"
+  - "SYF"
+  - "SYG"
+  - "SYU"
+  - "SYV"
+  - "SYZ"
+  - "SZD"
+  - "SZJ"
+  - "SZP"
+  - "SZT"
+  - "SZU"
+  - "SZV"
+am_settlement_time: "09:30:00"
+# Vendor implied-volatility maturity convention, verified against the vendor's own Greeks
+# (vega / gamma = S^2 * iv * tau): only the SPX root is referenced to 09:30 ET; every other
+# root to the session close. SPX-root expirations dated before 2015 are referenced to the
+# session preceding the recorded expiration date.
+vendor_am_iv_roots:
+  - "SPX"
+vendor_am_iv_previous_session_before: "2015-01-01"

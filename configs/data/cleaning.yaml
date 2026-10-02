@@ -1,0 +1,23 @@
+target_symbol: "^SPX"
+allowed_option_types:
+  - "C"
+  - "P"
+min_valid_bid_exclusive: 0.0
+min_valid_ask_exclusive: 0.0
+require_ask_ge_bid: true
+require_positive_iv: true
+require_positive_vega: true
+require_positive_underlying_price: true
+min_valid_mid_price_exclusive: 0.0
+max_abs_log_moneyness: 0.5
+min_tau_years: 0.0001
+max_tau_years: 2.5
+# Vendor placeholder values that are not market observations (verified in the raw archive).
+# Bid/ask 998/999 is a no-market placeholder (2004-2007). Implied volatilities of exactly
+# 0.02 (2.06 million rows) and 0.001 are solver sentinels written for deep in-the-money
+# contracts whose implied volatility could not be solved.
+placeholder_bid_ask_pairs:
+  - [998.0, 999.0]
+placeholder_implied_volatilities:
+  - 0.02
+  - 0.001

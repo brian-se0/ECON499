@@ -1,0 +1,7 @@
+lag_windows:
+  - 1
+  - 5
+  - 22
+include_daily_change: true
+include_mask: true
+include_liquidity: true

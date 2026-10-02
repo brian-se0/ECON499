@@ -1,0 +1,37 @@
+"""Validation-aware LightGBM fitting utilities."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import numpy as np
+
+from ivcast.config import TrainingProfileConfig
+from ivcast.models.base import DatasetMatrices
+from ivcast.models.lightgbm_model import LightGBMSurfaceModel
+
+
+def fit_and_predict_lightgbm(
+    model: LightGBMSurfaceModel,
+    train_index: np.ndarray,
+    validation_index: np.ndarray,
+    predict_index: np.ndarray,
+    matrices: DatasetMatrices,
+    training_profile: TrainingProfileConfig,
+    *,
+    on_factor_progress: Callable[[int, int], None] | None = None,
+) -> np.ndarray:
+    """Fit LightGBM with validation-aware early stopping and return predictions."""
+
+    model.fit(
+        features=matrices.features[train_index],
+        targets=matrices.targets[train_index],
+        observed_masks=matrices.observed_masks[train_index],
+        vega_weights=matrices.vega_weights[train_index],
+        training_weights=matrices.training_weights[train_index],
+        validation_features=matrices.features[validation_index],
+        validation_targets=matrices.targets[validation_index],
+        training_profile=training_profile,
+        on_factor_complete=on_factor_progress,
+    )
+    return model.predict(matrices.features[predict_index])
